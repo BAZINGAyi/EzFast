@@ -5,33 +5,15 @@ This module provides asynchronous database operations built on top of the base d
 It's suitable for high-concurrency scenarios using async/await patterns with engine-based operations.
 """
 
-import asyncio
 from contextlib import contextmanager
 import time
-from functools import wraps
 from typing import Any, Dict, Generator, Optional, List
 from sqlalchemy import MetaData, Table, delete, select, func
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.sql.expression import text
 
 from .db_base import DatabaseBase
-
-
-def async_wrap(func):
-    """
-    装饰器：将阻塞的方法封装为异步方法
-    
-    Args:
-        func: 要包装的同步函数
-        
-    Returns:
-        异步包装后的函数
-    """
-    @wraps(func)
-    async def wrapper(*args, **kwargs):
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
-    return wrapper
+from core.utils.async_tools import async_wrap
 
 
 class AsyncDB(DatabaseBase):
@@ -133,7 +115,22 @@ class AsyncDB(DatabaseBase):
         raise NotImplementedError("Execute query functionality not implemented for engine-based operations")
 
     @async_wrap
-    def run_query(
+    def execute_query_stmt(self, stmt, return_clear=False):
+        """
+        Execute a SQL statement.
+
+        :param stmt: The SQL statement to execute.
+        :return: The result of the execution.
+        """
+        if isinstance(stmt, str):
+            stmt = text(stmt)
+
+        with self.get_conn() as conn:
+            result = conn.execute(stmt)
+            rows = [dict(row._mapping) for row in result] if return_clear else result.fetchall()
+            return rows
+
+    async def run_query(
         self,
         table,
         select_columns=None,
@@ -206,13 +203,7 @@ class AsyncDB(DatabaseBase):
 
         # 执行查询
         self.logger.debug(f"Executing query: {str(stmt)}")
-        with self.get_conn() as conn:
-            result = conn.execute(stmt)
-            if return_clear:
-                rows = [dict(row._mapping) for row in result]
-            else:
-                rows = result.fetchall()
-        
+        rows = await self.execute_query_stmt(stmt, return_clear=return_clear)
         self.logger.info(f"Query completed, returned {len(rows)} rows")
         return rows
     
