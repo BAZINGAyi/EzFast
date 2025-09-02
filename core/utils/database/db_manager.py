@@ -10,7 +10,7 @@ import logging
 from typing import Dict, Any, Union, Optional
 from pydantic import BaseModel, Field, field_validator
 
-from db_async import AsyncDB
+from .db_async import AsyncDB
 
 
 class DatabaseConfig(BaseModel):

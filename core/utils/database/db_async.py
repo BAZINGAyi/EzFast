@@ -563,7 +563,6 @@ class AsyncDB(DatabaseBase):
             except Exception as e:
                 error_msg = f"Operation {i+1} failed ({operation} on {operation_data['table']}): {str(e)}"
                 error_messages.append(error_msg)
-                self.logger.error(error_msg)
                 raise  # 重新抛出异常
 
     @async_wrap
