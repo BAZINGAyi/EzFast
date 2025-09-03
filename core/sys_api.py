@@ -12,7 +12,7 @@ from core import (
     main_db,
 )
     
-from core.models.user_models import User
+from core.models.user_models import Permission, User
 from core.utils.async_tools import async_wrap
 from core.config import settings
 
@@ -88,3 +88,29 @@ async def create_user(request: Request):
         "message": f"User {user_id} created a new user",
         "created_user": "new_user"
     }
+
+
+
+from core.models.user_models import User
+from core.dynamic_api_manager import DynamicApiManager
+
+# user_config = {
+#     'module_name': "User",
+#     'create': {'permission_name': "WRITE"},
+#     'read_one': {'permission_name': "READ"},
+#     'update': {'permission_name': "UPDATE"},
+#     'delete': {'permission_name': "DELETE"},
+# }
+
+# user_api = DynamicApiManager(User, user_config)
+
+
+permission_config = {
+    'module_name': "Permission",
+    'create': {'permission_name': "WRITE"},
+    'read_one': {'permission_name': "READ"},
+    'read_filter': {'permission_name': 'READ'},
+    'update': {'permission_name': "UPDATE"},
+    'delete': {'permission_name': "DELETE"},
+}
+permission_api = DynamicApiManager(Permission, permission_config)

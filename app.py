@@ -3,6 +3,7 @@ from fastapi import FastAPI, HTTPException
 import uvicorn
 from core import lifespan, global_exception_handler, http_exception_handler
 from core.sys_api import router as sys_api_router
+from core.sys_api import user_api, permission_api
 
 
     
@@ -16,6 +17,8 @@ app = FastAPI(
 
 # 注册系统 API 路由，前缀为 /api
 app.include_router(sys_api_router, prefix="/api/sys", tags=["系统API"])
+# app.include_router(user_api.get_router(), prefix="/api", tags=["User API"])
+app.include_router(permission_api.get_router(), prefix="/api", tags=["Permission API"])
 
 # 根路由
 @app.get("/")
