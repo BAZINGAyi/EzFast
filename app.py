@@ -1,9 +1,10 @@
 
 from fastapi import FastAPI, HTTPException
+from pydantic_core import ValidationError
 import uvicorn
-from core import lifespan, global_exception_handler, http_exception_handler
+from core import lifespan, global_exception_handler, http_exception_handler, pydantic_validation_exception_handler
 from core.sys_api import router as sys_api_router
-from core.sys_api import user_api, permission_api
+from core.sys_api import user_router, permission_router
 
 
     
@@ -17,8 +18,8 @@ app = FastAPI(
 
 # 注册系统 API 路由，前缀为 /api
 app.include_router(sys_api_router, prefix="/api/sys", tags=["系统API"])
-# app.include_router(user_api.get_router(), prefix="/api", tags=["User API"])
-app.include_router(permission_api.get_router(), prefix="/api", tags=["Permission API"])
+app.include_router(user_router, prefix="/api", tags=["User API"])
+app.include_router(permission_router, prefix="/api", tags=["Permission API"])
 
 # 根路由
 @app.get("/")
@@ -33,6 +34,7 @@ async def health_check():
     return {"status": "healthy"}
 
 # 注册异常处理器
+app.add_exception_handler(ValidationError, pydantic_validation_exception_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(Exception, global_exception_handler)
 
@@ -41,7 +43,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "app:app",
         host="0.0.0.0",
-        port=8000,
+        port=8001,
         reload=True
     )
     

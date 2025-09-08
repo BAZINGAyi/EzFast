@@ -8,7 +8,7 @@ It's suitable for high-concurrency scenarios using async/await patterns with eng
 from contextlib import contextmanager
 import time
 from typing import Any, Dict, Generator, Optional, List
-from sqlalchemy import MetaData, Table, delete, select, func
+from sqlalchemy import MetaData, Table, delete, select, func, update
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.sql.expression import text
 
@@ -157,6 +157,9 @@ class AsyncDB(DatabaseBase):
         # 如果传入的是字符串，创建Table对象
         if isinstance(table, str):
             table = self.make_table(table)
+        # 如果是 orm 对象，直接使用
+        elif hasattr(table, '__table__'):
+            table = table.__table__
 
         # 转换 select_columns 中的列名字符串为对应的列对象
         if select_columns:
@@ -183,10 +186,20 @@ class AsyncDB(DatabaseBase):
 
         # 如果 order_by_columns 存在，则应用 ORDER BY
         if order_by_columns:
-            order_by_columns = [
-                getattr(table.c, col)
-                if isinstance(col, str) else col for col in order_by_columns]
-            stmt = stmt.order_by(*order_by_columns)
+            processed_columns = []
+            for col in order_by_columns:
+                if isinstance(col, str):
+                    parts = col.strip().split()
+                    col_name = parts[0]
+                    col_obj = getattr(table.c, col_name)
+                    # 如果有第二部分且为desc，则降序，否则升序
+                    if len(parts) == 2 and parts[1].lower() == 'desc':
+                        processed_columns.append(col_obj.desc())
+                    else:
+                        processed_columns.append(col_obj.asc())
+                else:
+                    processed_columns.append(col)
+            stmt = stmt.order_by(*processed_columns)
 
         # 添加 WHERE 条件
         if where_conditions:
@@ -202,7 +215,7 @@ class AsyncDB(DatabaseBase):
             stmt = stmt.offset(offset)
 
         # 执行查询
-        self.logger.debug(f"Executing query: {str(stmt)}")
+        # self.logger.debug(f"Executing query: {str(stmt)}")
         rows = await self.execute_query_stmt(stmt, return_clear=return_clear)
         self.logger.info(f"Query completed, returned {len(rows)} rows")
         return rows
@@ -541,7 +554,6 @@ class AsyncDB(DatabaseBase):
 
                     # 构建更新语句
                     update_stmt = table.update().where(condition).values(data)
-                    print(f"Update statement: {update_stmt}")
                     result = conn.execute(update_stmt)
                     affected_rows += result.rowcount
                         
@@ -641,3 +653,174 @@ class AsyncDB(DatabaseBase):
             status = False
         
         return status, error_messages, statistics_list
+
+    @async_wrap
+    def add(self, model_class, data: Dict[str, Any]) -> tuple:
+        """
+        使用 ORM 方式添加单条记录到表中。
+        
+        Args:
+            model_class: SQLAlchemy ORM 模型类
+            data (Dict[str, Any]): 要插入的数据，键值对形式
+            
+        Returns:
+            tuple: (success, result)
+                - success (bool): 操作是否成功
+                - result: 成功时返回包含 ID 的字典，失败时返回错误信息字符串
+            
+        Example:
+            >>> from core.models.user_models import User
+            >>> # 添加用户记录
+            >>> success, result = await db.add(User, {
+            ...     'name': 'John Doe',
+            ...     'email': 'john@example.com',
+            ...     'age': 30
+            ... })
+            >>> if success:
+            ...     print(f"Created user with ID: {result['id']}")
+            ... else:
+            ...     print(f"Error: {result}")
+            
+        Note:
+            - 使用 ORM 模型类进行操作
+            - 成功时返回包含 ID 的字典
+            - 使用 get_session 上下文管理器确保事务安全
+        """
+        try:
+            with self.get_session() as session:
+                # 创建模型实例
+                instance = model_class(**data)
+                # 添加到会话
+                session.add(instance)
+                # 刷新以获取自动生成的 ID 等信息
+                session.flush()
+                session.refresh(instance)
+                
+                # 构建返回字典，包含 ID
+                result = instance.to_dict()
+                return True, result
+
+        except Exception as e:
+            error_msg = f"Failed to add record to table '{model_class.__tablename__}': {str(e)}"
+            self.logger.error(error_msg)
+            return False, error_msg
+
+    @async_wrap  
+    def update(self, model_class, data: Dict[str, Any], filter_condition) -> tuple:
+        """
+        使用 ORM 方式更新表中符合条件的记录。
+        
+        Args:
+            model_class: SQLAlchemy ORM 模型类
+            data (Dict[str, Any]): 要更新的数据，键值对形式
+            filter_condition: 过滤条件，直接传入 SQLAlchemy 条件表达式
+            
+        Returns:
+            tuple: (success, result)
+                - success (bool): 操作是否成功
+                - result: 成功时返回包含受影响行数的字典，失败时返回错误信息字符串
+            
+        Example:
+            >>> from core.models.user_models import User
+            >>> # 使用简单条件更新
+            >>> success, result = await db.update(
+            ...     User,
+            ...     {'status': 'active'},
+            ...     User.id == 1
+            ... )
+            >>> if success:
+            ...     print(f"Updated {result['affected_rows']} rows")
+            ... else:
+            ...     print(f"Error: {result}")
+            
+            >>> # 使用复杂条件更新
+            >>> success, result = await db.update(
+            ...     User,
+            ...     {'status': 'inactive'},
+            ...     User.name.like("A%")
+            ... )
+            
+            >>> # 使用多个条件
+            >>> from sqlalchemy import and_
+            >>> success, result = await db.update(
+            ...     User,
+            ...     {'status': 'active'},
+            ...     and_(User.age > 18, User.email.like("%@gmail.com"))
+            ... )
+            
+        Note:
+            - 使用 ORM 模型类进行操作
+            - 直接传入 SQLAlchemy 条件表达式
+            - 使用 get_session 上下文管理器确保事务安全
+            - 成功时返回包含受影响行数的字典
+        """
+        try:
+            with self.get_session() as session:
+                stmt = update(model_class).where(filter_condition).values(**data)
+                affected_rows = session.execute(stmt).rowcount
+                if affected_rows == 1:
+                    return True, session.execute(select(model_class).where(filter_condition)).scalars().first().to_dict()
+                elif affected_rows == 0:
+                    return False, "No records to find and update"
+                return True, {'affected_rows': affected_rows}
+        except Exception as e:
+            error_msg = f"Failed to update records in table '{model_class.__tablename__}': {str(e)}"
+            self.logger.error(error_msg)
+            return False, error_msg
+
+    @async_wrap  
+    def delete(self, model_class, filter_condition) -> tuple:
+        """
+        使用 ORM 方式删除表中符合条件的记录。
+        
+        Args:
+            model_class: SQLAlchemy ORM 模型类
+            filter_condition: 过滤条件，直接传入 SQLAlchemy 条件表达式
+            
+        Returns:
+            tuple: (success, result)
+                - success (bool): 操作是否成功
+                - result: 成功时返回包含删除行数的字典，失败时返回错误信息字符串
+            
+        Example:
+            >>> from core.models.user_models import User
+            >>> # 使用简单条件删除
+            >>> success, result = await db.delete(
+            ...     User,
+            ...     User.id == 1
+            ... )
+            >>> if success:
+            ...     print(f"Deleted {result['deleted_rows']} rows")
+            ... else:
+            ...     print(f"Error: {result}")
+            
+            >>> # 使用复杂条件删除
+            >>> success, result = await db.delete(
+            ...     User,
+            ...     User.status == 'inactive'
+            ... )
+            
+            >>> # 使用多个条件
+            >>> from sqlalchemy import and_
+            >>> success, result = await db.delete(
+            ...     User,
+            ...     and_(User.age < 18, User.status == 'pending')
+            ... )
+            
+        Note:
+            - 使用 ORM 模型类进行操作
+            - 直接传入 SQLAlchemy 条件表达式
+            - 使用 get_session 上下文管理器确保事务安全
+            - 成功时返回包含删除行数的字典
+            - 请谨慎使用，删除操作不可逆
+        """
+        try:
+            with self.get_session() as session:
+                deleted_rows = delete(model_class).where(filter_condition)
+                result = session.execute(deleted_rows)
+                return True, {'deleted_rows': result.rowcount}
+
+        except Exception as e:
+            error_msg = f"Failed to delete records from table '{model_class.__tablename__}': {str(e)}"
+            self.logger.error(error_msg)
+            return False, error_msg

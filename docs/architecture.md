@@ -11,7 +11,7 @@ The project is developed using Python 3.10 or later. Ensure that your environmen
 ## System 功能
 
 
-### 权限管理
+## 权限管理
 
 ### 表结构说明
 
@@ -60,7 +60,7 @@ Authorization: Bearer <access_token>
 
 系统提供 `@require_auth` 装饰器，支持多种认证和权限校验场景：
 
-场景1：仅认证，无权限校验
+场景1：只需要认证，不检查权限,oauth2_scheme的作用是为了 swagger 发送时，带认证头。
 ```python
 @router.get("/simple-data", dependencies=[Depends(oauth2_scheme)])
 @require_auth()
@@ -142,7 +142,7 @@ role_permission.has_permission(permission_bitmask)    # 检查权限
 @require_auth(module_name="User", permission_names=["READ", "WRITE"])
 
 # 不同模块的权限配置
-@require_auth(module_name="Order", permission_names=["CREATE", "UPDATE"])
+@require_auth(module_name="Order", permission_names=["WRITE", "UPDATE"])
 ```
 
 #### 6. 错误处理
@@ -163,5 +163,147 @@ HTTP 异常处理 (`http_exception_handler`)
 {
     "code": 401,
     "msg": "Token is invalid or expired"
+}
+```
+
+## 动态 API 注册功能
+
+系统提供了基于 SQLAlchemy 模型的动态 API 生成功能，通过 `DynamicApiManager` 类自动为数据库表生成标准的 CRUD API，极大减少了重复代码的编写。
+
+### 1. 核心组件
+
+#### DynamicApiManager 类
+位于 `core/dynamic_api_manager.py`，是动态 API 生成的核心组件：
+
+**主要功能：**
+- 自动生成 Pydantic Schema（CreateSchema、UpdateSchema、ResponseSchema）
+- 基于配置自动注册 CRUD 路由
+- 集成权限验证和 JWT 认证
+- 支持自定义 Schema 过滤返回字段
+- 提供统一的响应格式
+- 基于 SQLAlchemy 模型自动生成 Pydantic Schema
+
+#### FilterRequest 模型
+提供强大的过滤查询功能，支持：
+- **复杂条件查询**：支持 AND/OR 逻辑组合、多种操作符（=, !=, >, <, >=, <=, LIKE, IN, BETWEEN, IS_NULL）
+- **字段选择**：指定查询列名优化性能
+- **排序分组**：支持多列排序和 GROUP BY 聚合
+- **分页功能**：通过 limit 和 offset 实现分页
+
+### 2. 配置格式
+
+```python
+user_config = {
+    'module_name': "User",  # 权限模块名称
+    'create': {'permission_name': "WRITE"},
+    'read_one': {
+        'permission_name': "READ",
+        'validate_schema': UserPublicSchema  # 可选：自定义返回Schema
+    },
+    'read_filter': {
+        'permission_name': "READ",
+        'validate_schema': UserPublicSchema  # 可选：过滤返回字段
+    },
+    'update': {'permission_name': "UPDATE"},
+    'delete': {'permission_name': "DELETE"},
+}
+
+# 创建并注册动态 API
+user_api = DynamicApiManager(User, user_config)
+app.include_router(user_api.get_router(), prefix="/api", tags=["User API"])
+```
+
+### 3. 生成的 API 端点
+
+| 操作 | HTTP方法 | 路径 | 说明 |
+|-----|---------|------|------|
+| 创建 | POST | `/{table_name}` | 创建新记录，使用动态生成的 CreateSchema |
+| 查询单个 | GET | `/{table_name}/{id}` | 根据 ID 查询单条记录 |
+| 过滤查询 | POST | `/{table_name}/filter` | 使用 FilterRequest 进行复杂查询 |
+| 更新 | PUT | `/{table_name}/{id}` | 更新指定记录，使用 UpdateSchema |
+| 删除 | DELETE | `/{table_name}/{id}` | 删除指定记录 |
+
+### 4. 权限集成
+
+每个 API 端点都自动集成权限验证：
+```python
+@require_auth(module_name="User", permission_names=["READ"])
+```
+- 支持基于模块和权限名称的细粒度访问控制
+- 自动验证 JWT Token 有效性
+- 权限不足时返回 403 错误
+
+### 5. Schema 自动生成
+
+**CreateSchema**：基于表结构自动生成，排除自动字段（id、created_at、updated_at）
+**UpdateSchema**：所有字段均为可选，支持部分更新
+**ResponseSchema**：包含所有表字段用于响应
+
+### 6. 实际应用示例
+
+#### 系统API模块（sys_api.py）
+提供了完整的用户管理和权限管理 API：
+
+**用户管理 API**：
+```python
+# 标准 CRUD + 自定义密码处理
+user_config = {
+    'module_name': "User",
+    'read_one': {'permission_name': "READ", "validate_schema": ListUserSchema},
+    'read_filter': {'permission_name': 'READ', "validate_schema": ListUserSchema},
+    'delete': {'permission_name': "DELETE"},
+}
+
+# 自定义创建和更新 API 处理密码哈希
+@user_router.post("/user")
+@require_auth(module_name="User", permission_names=["WRITE"])
+async def create_user(request: Request, user: CreateUserSchema):
+    # 处理密码哈希逻辑
+```
+
+**权限管理 API**：
+```python
+permission_config = {
+    'module_name': "Permission",
+    'create': {'permission_name': "WRITE"},
+    'read_one': {'permission_name': "READ"},
+    'read_filter': {'permission_name': 'READ'},
+    'update': {'permission_name': "UPDATE"},
+    'delete': {'permission_name': "DELETE"},
+}
+```
+
+### 7. 高级特性
+
+#### 自定义 Schema 过滤
+支持通过 `validate_schema` 参数过滤返回字段：
+```python
+class UserPublicSchema(BaseModel):
+    id: int
+    username: str
+    email: str  # 只返回公开字段，隐藏敏感信息
+
+'read_one': {
+    'permission_name': "READ",
+    'validate_schema': UserPublicSchema
+}
+```
+
+#### 复杂查询示例
+```python
+filter_request = {
+    "where_conditions": {
+        "and": [
+            {"is_active": {"operator": "=", "value": True}},
+            {"or": [
+                {"username": {"operator": "LIKE", "value": "%admin%"}},
+                {"email": {"operator": "LIKE", "value": "%@admin.com"}}
+            ]}
+        ]
+    },
+    "select_columns": ["id", "username", "email"],
+    "order_by_columns": ["created_at DESC"],
+    "limit": 50,
+    "offset": 0
 }
 ```

@@ -7,6 +7,7 @@ import traceback
 from fastapi import HTTPException, Request
 
 from fastapi.responses import JSONResponse
+from pydantic_core import ValidationError
 from core.utils.database.db_manager import DatabaseManager
 from core.config import settings
 
@@ -92,14 +93,33 @@ async def lifespan(app):
     # 应用关闭逻辑
     print("🛑 应用关闭完成！")
     
+
+async def pydantic_validation_exception_handler(request, exc: ValidationError):
+    """
+    Pydantic验证异常处理器
+    处理 Pydantic 的 ValidationError，提供统一的错误响应格式
+    """
+    tb_str = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    sys_logger.error(f"Validation exception traceback: {tb_str}")
+    
+    return JSONResponse(
+        status_code=500,
+        content={
+            "code": 500,
+            "msg": "数据验证时发生错误，请联系管理员，查看日志获取详细信息"
+        },
+    )
+    
     
 async def http_exception_handler(request: Request, exc: HTTPException):
     """
     HTTP异常处理器
     处理 FastAPI 的 HTTPException，提供统一的错误响应格式
     """
-    sys_logger.warning(f"HTTP Exception: {exc.status_code} - {exc.detail} - URL: {request.url}")
-    
+    tb_str = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    sys_logger.error(f"HTTP Exception: {exc.status_code} - {exc.detail} - URL: {request.url}")
+    sys_logger.error(f"HTTP Exception traceback: {tb_str}")
+
     return JSONResponse(
         status_code=exc.status_code,
         content={

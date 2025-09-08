@@ -116,7 +116,11 @@ class FilterRequest(BaseModel):
         ge=0,
         example=0
     )
-
+    
+class ReponseModel(BaseModel):
+    code: int
+    msg: str
+    data: Optional[Any] = None
 
 class DynamicApiManager:
     """
@@ -147,6 +151,39 @@ class DynamicApiManager:
         
         # 注册路由
         self._register_routes()
+    
+    def _apply_schema_filter(self, data: Any, validate_schema: Optional[Type[BaseModel]]) -> Any:
+        """
+        应用Schema过滤，只返回Schema定义的字段
+        
+        Args:
+            data: 原始数据（单个字典或字典列表）
+            validate_schema: 可选的Pydantic模型类
+            
+        Returns:
+            过滤后的数据
+        """
+        if not validate_schema or not data:
+            return data 
+        
+        # 处理单个字典
+        if isinstance(data, dict):
+            schema_instance = validate_schema(**data)
+            return schema_instance.model_dump()
+        
+        # 处理字典列表
+        elif isinstance(data, list):
+            filtered_data = []
+            for item in data:
+                if isinstance(item, dict):
+                    schema_instance = validate_schema(**item)
+                    filtered_data.append(schema_instance.model_dump())
+                else:
+                    filtered_data.append(item)
+            return filtered_data
+        
+        return data
+            
     
     def _generate_schemas(self):
         """生成 Pydantic 模型用于请求和响应"""
@@ -219,7 +256,8 @@ class DynamicApiManager:
             prefix,
             summary=f"Create {self.model_name}",
             description=f"Create a new {self.model_name} record",
-            dependencies=[Depends(oauth2_scheme)]
+            dependencies=[Depends(oauth2_scheme)],
+            response_model=ReponseModel
         )
         @require_auth(
             module_name=self.module_name, 
@@ -228,35 +266,27 @@ class DynamicApiManager:
         async def create_handler(request: Request, data: self.CreateSchema): # type: ignore
             """创建新记录"""
 
-            data = data.dict()
-            data["created_at"] = datetime.now()
-            insert_data = [
-                {
-                    "table": self.model.__table__,
-                    "data": [data],
-                    "operation": "insert"
-                }
-            ]
-            status, msg, _ = await main_db.bulk_dml_table(insert_data)
-            code = HTTP_SUCCESS
-            if not status:
-                code = HTTP_FAILED
+            data = data.model_dump()
+            status, data = await main_db.add(self.model, data)
+            code = HTTP_SUCCESS if status else HTTP_FAILED
 
             return {
                 "code": code,
-                "msg": msg,
+                "msg": "Success to create" if status else "Failed to create",
                 "data": data
             }
     
     def _register_read_one_route(self, prefix: str):
         """注册查询单个记录路由"""
         permission_name = self.config['read_one']['permission_name']
+        validate_schema = self.config['read_one'].get('validate_schema', None)
         
         @self.router.get(
             f"{prefix}/{{item_id}}",
             summary=f"Get {self.model_name} by ID",
             description=f"Retrieve a specific {self.model_name} record by ID",
-            dependencies=[Depends(oauth2_scheme)]
+            dependencies=[Depends(oauth2_scheme)],
+            response_model=ReponseModel
         )
         @require_auth(
             module_name=self.module_name, 
@@ -265,28 +295,35 @@ class DynamicApiManager:
         async def read_one_handler(request: Request, item_id: int):
             """查询单个记录"""
             result = await main_db.run_query(
-                table=self.model.__table__,
+                table=self.model,
                 where_conditions={"id": {"operator": "=", "value": item_id}},
                 return_clear=True
             )
-            code = HTTP_SUCCESS
-            if not result:
-                code = HTTP_FAILED
+            
+            code = HTTP_SUCCESS if result else HTTP_FAILED
+            data = None
+            
+            if result and code == HTTP_SUCCESS:
+                # 应用Schema过滤
+                data = self._apply_schema_filter(result[0], validate_schema)
+                    
             return {
                 "code": code,
                 "msg": "Query successful" if code == HTTP_SUCCESS else "Query failed",
-                "data": result[0] if result and code == HTTP_SUCCESS else None
+                "data": data
             }
 
     def _register_read_filter_route(self, prefix: str):
         """注册过滤查询路由"""
         permission_name = self.config['read_filter']['permission_name']
+        validate_schema = self.config['read_filter'].get('validate_schema', None)
         
         @self.router.post(
             f"{prefix}/filter",
             summary=f"灵活过滤查询 {self.model_name} 记录",
             description=f"""对 {self.model_name} 表进行灵活的过滤查询。""",
-            dependencies=[Depends(oauth2_scheme)]
+            dependencies=[Depends(oauth2_scheme)],
+            response_model=ReponseModel
         )
         @require_auth(
             module_name=self.module_name, 
@@ -297,7 +334,7 @@ class DynamicApiManager:
         
             # 调用 run_query 方法，固定 return_clear=True
             result = await main_db.run_query(
-                table=self.model.__table__,
+                table=self.model,
                 select_columns=filter_request.select_columns,
                 where_conditions=filter_request.where_conditions,
                 group_by_columns=filter_request.group_by_columns,
@@ -306,12 +343,18 @@ class DynamicApiManager:
                 offset=filter_request.offset,
                 return_clear=True
             )
+            
+            # 应用Schema过滤
+            processed_data = self._apply_schema_filter(result, validate_schema)
+            data = {
+                "data": processed_data,
+                "total": len(processed_data) if processed_data else 0
+            }
              
             return {
                 "code": HTTP_SUCCESS,
                 "msg": "Query successful",
-                "data": result,
-                "total": len(result) if result else 0
+                "data": data
             }
     
     def _register_update_route(self, prefix: str):
@@ -322,7 +365,8 @@ class DynamicApiManager:
             f"{prefix}/{{item_id}}",
             summary=f"Update {self.model_name}",
             description=f"Update a specific {self.model_name} record",
-            dependencies=[Depends(oauth2_scheme)]
+            dependencies=[Depends(oauth2_scheme)],
+            response_model=ReponseModel
         )
         @require_auth(
             module_name=self.module_name, 
@@ -334,7 +378,7 @@ class DynamicApiManager:
             
             # check if record exists
             result = await main_db.run_query(
-                table=self.model.__table__,
+                table=self.model,
                 where_conditions={"id": {"operator": "=", "value": item_id}},
                 return_clear=True
             )
@@ -346,21 +390,22 @@ class DynamicApiManager:
                 }
             
             # update date
-            data["updated_at"] = datetime.now()
-            update_data = [
-                {
-                    "table": self.model.__table__,
-                    "data": data,
-                    "operation": "update",
-                    "where_conditions": {"id": {"operator": "=", "value": item_id}}
+            filtered_data = {k: v for k, v in data.items() if v is not None}
+            if not filtered_data:
+                return {
+                    "code": HTTP_FAILED,
+                    "msg": "No fields to update",
+                    "data": None
                 }
-            ]
-            status, msg, _ = await main_db.bulk_dml_table(update_data)
-            code = HTTP_SUCCESS
-            data['id'] = item_id
-            if not status:
-                code = HTTP_FAILED
-
+            
+            status, data = await main_db.update(
+                self.model,
+                filtered_data,
+                main_db.build_where_conditions(self.model, {"id": {"operator": "=", "value": item_id}})
+            )
+            code = HTTP_SUCCESS if status else HTTP_FAILED
+            msg = "Update successful" if status else "Update failed"
+        
             return {
                 "code": code,
                 "msg": msg,
@@ -375,7 +420,8 @@ class DynamicApiManager:
             f"{prefix}/{{item_id}}",
             summary=f"Delete {self.model_name}",
             description=f"Delete a specific {self.model_name} record",
-            dependencies=[Depends(oauth2_scheme)]
+            dependencies=[Depends(oauth2_scheme)],
+            response_model=ReponseModel
         )
         @require_auth(
             module_name=self.module_name, 
@@ -385,7 +431,7 @@ class DynamicApiManager:
             """删除记录"""
             # check if record exists
             result = await main_db.run_query(
-                table=self.model.__table__,
+                table=self.model,
                 where_conditions={"id": {"operator": "=", "value": item_id}},
                 return_clear=True
             )
@@ -396,22 +442,14 @@ class DynamicApiManager:
                     "data": None
                 }
             
-            delete_data = [
-                {
-                    "table": self.model.__table__,
-                    "operation": "delete",
-                    "where_conditions": {"id": {"operator": "=", "value": item_id}}
-                }
-            ]
-
-            status, msg, _ = await main_db.bulk_dml_table(delete_data)
-            code = HTTP_SUCCESS
-            if not status:
-                code = HTTP_FAILED
+            status, affected = await main_db.delete(
+                self.model,
+                main_db.build_where_conditions(self.model, {"id": {"operator": "=", "value": item_id}})
+            )
 
             return {
-                "code": code,
-                "msg": msg,
+                "code": HTTP_SUCCESS if status else HTTP_FAILED,
+                "msg": "Delete successful" if status else "Delete failed",
                 "data": {"id": item_id}
             }
 
@@ -424,13 +462,27 @@ class DynamicApiManager:
 """
 from core.models.user_models import User
 from core.dynamic_api_manager import DynamicApiManager
+from pydantic import BaseModel
+
+# 定义自定义返回 Schema (可选)
+class UserPublicSchema(BaseModel):
+    id: int
+    username: str
+    email: str
+    created_at: datetime
 
 # 配置动态API
 user_config = {
     'module_name': "User",
     'create': {'permission_name': "CREATE"},
-    'read_one': {'permission_name': "READ"},
-    'read_filter': {'permission_name': "READ"},
+    'read_one': {
+        'permission_name': "READ",
+        'validate_schema': UserPublicSchema  # 可选：指定返回数据的Schema
+    },
+    'read_filter': {
+        'permission_name': "READ",
+        'validate_schema': UserPublicSchema  # 可选：对列表查询也应用Schema过滤
+    },
     'update': {'permission_name': "UPDATE"},
     'delete': {'permission_name': "DELETE"},
 }

@@ -1,5 +1,8 @@
+from datetime import datetime
+from typing import Optional
 from fastapi import APIRouter, Depends, Request, HTTPException
 from fastapi.security import OAuth2PasswordRequestForm
+from pydantic import BaseModel
 
 from core.auth import (
     oauth2_scheme, 
@@ -13,7 +16,6 @@ from core import (
 )
     
 from core.models.user_models import Permission, User
-from core.utils.async_tools import async_wrap
 from core.config import settings
 
 # 创建系统 API 路由器
@@ -28,83 +30,127 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     
     为 Swagger UI 提供认证功能，返回 JWT token
     """
-    @async_wrap
-    def check_pass():
-        with main_db.get_session() as session:
-            user = session.query(User).filter(User.username == form_data.username).first()
-            
-            if not user or not user.check_password(form_data.password):
-                raise HTTPException(
-                    status_code=401,
-                    detail="Incorrect username or password",
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
-            return user.id
+    user = await main_db.run_query(
+        User,
+        where_conditions={"username": {"operator": "=", "value": form_data.username}},
+        return_clear=True)
+    if not user or (user and User(**user[0]).check_password(form_data.password) is False):
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
         
-    user_id = await check_pass()
+    user_id = user[0]["id"]
     access_token = create_access_token(data={"user_id": user_id})
     return {
         "access_token": access_token,
         "token_type": "bearer",
-        "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60 * 2
     }
-
-# =============== 示例业务路由 ===============
-
-# 场景1: 只需要认证，不检查权限,oauth2_scheme的作用是为了 swagger 发送时，带认证头。
-@router.get("/simple-data", dependencies=[Depends(oauth2_scheme)])
-@require_auth()
-async def get_simple_data(request: Request):
-    """获取简单数据 - 只验证身份"""
-    return {"data": "some protected data", "message": "Authentication successful"}
-
-# 场景3: 需要用户ID的场景
-@router.get("/my-data", dependencies=[Depends(oauth2_scheme)])
-@require_auth()
-async def get_my_data(request: Request):
-    """获取用户相关数据 - 使用用户ID"""
-    user_id = request.state.current_user_id
-    return {"user_id": user_id, "data": f"Data for user {user_id}"}
-
-# 场景4: 需要完整用户信息的场景
-@router.get("/profile", dependencies=[Depends(oauth2_scheme)])
-@require_auth()
-async def get_profile(request: Request):
-    """获取用户资料 - 查询完整用户信息"""
-    user = await get_current_user_from_request(request)
-    return {
-        "username": user["username"],
-        "email": user["email"],
-        "created_at": user["created_at"].isoformat() if user["created_at"] else None
-    }
-
-# 场景7: 组合权限示例 - 使用字符串名称
-@router.post("/users", dependencies=[Depends(oauth2_scheme)])
-@require_auth(module_name="User", permission_names=["WRITE", "READ"])
-async def create_user(request: Request):
-    """创建用户 - 需要创建和写入权限 (使用字符串名称)"""
-    user_id = request.state.current_user_id
-    return {
-        "message": f"User {user_id} created a new user",
-        "created_user": "new_user"
-    }
-
-
 
 from core.models.user_models import User
-from core.dynamic_api_manager import DynamicApiManager
+from core.dynamic_api_manager import HTTP_FAILED, HTTP_SUCCESS, DynamicApiManager
 
-# user_config = {
-#     'module_name': "User",
-#     'create': {'permission_name': "WRITE"},
-#     'read_one': {'permission_name': "READ"},
-#     'update': {'permission_name': "UPDATE"},
-#     'delete': {'permission_name': "DELETE"},
-# }
+# User API
+class CommonUserSchema(BaseModel):
+    username: str
+    email: str
+    phone_number: Optional[str] = None
+    role_id: int
+    locale: Optional[str] = None
+    
+class ListUserSchema(CommonUserSchema):
+    id: int
+    created_at: Optional[datetime] = None
+    
+class CreateUserSchema(CommonUserSchema):
+    password: str
 
-# user_api = DynamicApiManager(User, user_config)
+class UpdateUserSchema(BaseModel):
+    password: Optional[str] = None
+    email: Optional[str] = None
+    phone_number: Optional[str] = None
+    role_id: Optional[int] = None
+    locale: Optional[str] = None
+    username: Optional[str] = None
 
+user_config = {
+    'module_name': "User",
+    'read_one': {'permission_name': "READ", "validate_schema": ListUserSchema},
+    'read_filter': {'permission_name': 'READ', "validate_schema": ListUserSchema},
+    'delete': {'permission_name': "DELETE"},
+}
+user_router = DynamicApiManager(User, user_config).get_router()
 
+# 对于创建和修改用户操作，单独定义 api 以处理密码哈希
+@user_router.post("/user", dependencies=[Depends(oauth2_scheme)])
+@require_auth(module_name="User", permission_names=["WRITE"])
+async def create_user(request: Request, user: CreateUserSchema):
+    """创建用户 - 处理密码哈希"""
+    user_dict = user.model_dump()
+    password = user_dict.pop("password")
+
+    
+    # 生成密码哈希，及创建时间等属性
+    user = User(**user_dict)
+    user.set_password(password)
+    user_dict = user.to_dict()
+    user_dict["password_hash"] = user.password_hash
+    status, data = await main_db.add(User, user_dict)
+    code = HTTP_SUCCESS if status else HTTP_FAILED
+    if not status:
+        raise HTTPException(status_code=HTTP_FAILED, detail="Failed to create user")
+    
+    return {
+        "code": code,
+        "msg": "User created successfully" if status else "Failed to create user",
+        "data": data
+    }
+    
+@user_router.put("/user/{item_id}", dependencies=[Depends(oauth2_scheme)])
+@require_auth(module_name="User", permission_names=["UPDATE"])
+async def update_user(request: Request, item_id: int, user: UpdateUserSchema):
+    """更新用户 - 处理密码哈希"""
+    user_dict = user.model_dump()
+    is_all_none = all(value is None for value in user_dict.values())
+    if is_all_none:
+        raise HTTPException(status_code=HTTP_FAILED, detail="No fields to update")
+    
+    # check user exists
+    existing_user = await main_db.run_query(
+        User,
+        where_conditions={"id": {"operator": "=", "value": item_id}},
+        return_clear=True)
+    if not existing_user:
+        raise HTTPException(
+            status_code=HTTP_FAILED,
+            detail="User not found",
+        )
+
+    # 生成密码哈希，及创建时间等属性
+    user = User(**user_dict)
+    password = user_dict.pop("password", None)
+    if password:
+        user.set_password(password)
+    user_dict = user.to_dict()
+    user_dict["password_hash"] = user.password_hash
+    filtered_data = {k: v for k, v in user_dict.items() if v is not None}
+    status, data = await main_db.update(
+        User,
+        filtered_data,
+        main_db.build_where_conditions(User, {"id": {"operator": "=", "value": item_id}}))
+    code = HTTP_SUCCESS if status else HTTP_FAILED
+    if not status:
+        raise HTTPException(status_code=HTTP_FAILED, detail=data)
+
+    return {
+        "code": code,
+        "msg": "User updated successfully" if status else "Failed to update user",
+        "data": data
+    }
+
+# Permission API
 permission_config = {
     'module_name': "Permission",
     'create': {'permission_name': "WRITE"},
@@ -113,4 +159,4 @@ permission_config = {
     'update': {'permission_name': "UPDATE"},
     'delete': {'permission_name': "DELETE"},
 }
-permission_api = DynamicApiManager(Permission, permission_config)
+permission_router = DynamicApiManager(Permission, permission_config).get_router()

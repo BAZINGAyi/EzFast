@@ -492,6 +492,10 @@ class DatabaseBase(ABC):
             对于 LIKE 操作，如果值不包含 % 符号，会自动在末尾添加 %。
             对于 BETWEEN 操作，值应为包含两个元素的列表 [start, end]。
         """
+        # transfer orm to core
+        if hasattr(model, '__table__'):
+            model = model.__table__
+        
         conditions = []
 
         # 遍历 where_conditions 中的条件，递归处理 and/or 条件
