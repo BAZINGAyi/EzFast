@@ -13,7 +13,7 @@ from sqlalchemy import inspect
 
 from core.auth import require_auth, oauth2_scheme
 
-from core import main_db
+from core import load_permissions, main_db
 from core.constant import HTTP_FAILED, HTTP_SUCCESS
 
 
@@ -247,7 +247,7 @@ class DynamicApiManager:
         
         if 'delete' in self.config:
             self._register_delete_route(prefix)
-    
+
     def _register_create_route(self, prefix: str):
         """注册创建路由"""
         permission_name = self.config['create']['permission_name']
@@ -269,6 +269,8 @@ class DynamicApiManager:
             data = data.model_dump()
             status, data = await main_db.add(self.model, data)
             code = HTTP_SUCCESS if status else HTTP_FAILED
+            
+            await self.refresh_permissions_cache(status)
 
             return {
                 "code": code,
@@ -405,7 +407,9 @@ class DynamicApiManager:
             )
             code = HTTP_SUCCESS if status else HTTP_FAILED
             msg = "Update successful" if status else "Update failed"
-        
+
+            await self.refresh_permissions_cache(status)
+
             return {
                 "code": code,
                 "msg": msg,
@@ -447,6 +451,8 @@ class DynamicApiManager:
                 main_db.build_where_conditions(self.model, {"id": {"operator": "=", "value": item_id}})
             )
 
+            await self.refresh_permissions_cache(status)
+
             return {
                 "code": HTTP_SUCCESS if status else HTTP_FAILED,
                 "msg": "Delete successful" if status else "Delete failed",
@@ -456,6 +462,12 @@ class DynamicApiManager:
     def get_router(self) -> APIRouter:
         """获取生成的路由器"""
         return self.router
+
+    async def refresh_permissions_cache(self, code):
+        """刷新权限缓存"""
+        # 如果 module_name 是 Permission 或者 Module，对应 update/create/delete 操作需要刷新权限缓存
+        if code == HTTP_SUCCESS and self.module_name in ['Permission', 'Module']:
+            await load_permissions()
 
 
 # 使用示例

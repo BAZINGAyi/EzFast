@@ -164,6 +164,7 @@ cython_debug/
 .vscode/tasks.json
 .vscode/extensions.json
 .vscode/.ropeproject
+.vscode/settings.json
 
 # FastAPI / Application specific
 logs/

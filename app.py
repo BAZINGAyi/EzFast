@@ -4,7 +4,7 @@ from pydantic_core import ValidationError
 import uvicorn
 from core import lifespan, global_exception_handler, http_exception_handler, pydantic_validation_exception_handler
 from core.sys_api import router as sys_api_router
-from core.sys_api import user_router, permission_router
+from core.sys_api import user_router, permission_router, module_router, role_router
 
 
     
@@ -20,6 +20,8 @@ app = FastAPI(
 app.include_router(sys_api_router, prefix="/api/sys", tags=["系统API"])
 app.include_router(user_router, prefix="/api", tags=["User API"])
 app.include_router(permission_router, prefix="/api", tags=["Permission API"])
+app.include_router(module_router, prefix="/api", tags=["Module API"])
+app.include_router(role_router, prefix="/api", tags=["Role API"])
 
 # 根路由
 @app.get("/")

@@ -22,11 +22,26 @@ __PermissionsConstant = {}
 __ModulesConstant = {}
 def get_module_id(module_name: str) -> int:
     """Get module ID by name from constants."""
-    return __ModulesConstant.get(module_name, 0)
+    return __ModulesConstant.get(module_name.lower(), 0)
+
+def get_module_name(module_id: int) -> str:
+    """Get module name by ID from constants."""
+    for name, mid in __ModulesConstant.items():
+        if mid == module_id:
+            return name
+    return ""
 
 def get_permission_bit(permission_name: str) -> int:
     """Get permission bit by name from constants."""
-    return __PermissionsConstant.get(permission_name, 0)
+    return __PermissionsConstant.get(permission_name.lower(), 0)
+
+def get_permissions_names_from_bitmask(bitmask: int) -> list[str]:
+    """Get permission names from a bitmask."""
+    names = []
+    for name, bit in __PermissionsConstant.items():
+        if bitmask & bit:
+            names.append(name)
+    return names
 
 async def load_permissions():
     """
@@ -40,10 +55,10 @@ async def load_permissions():
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     for permission in results[0]:
-        __PermissionsConstant[permission["name"]] = permission["permission_bit"]
+        __PermissionsConstant[permission["name"].lower()] = permission["permission_bit"]
 
     for module in results[1]:
-        __ModulesConstant[module["name"]] = module["id"]
+        __ModulesConstant[module["name"].lower()] = module["id"]
 
     if settings.DEBUG:
         print("Loaded Permissions:", __PermissionsConstant)
