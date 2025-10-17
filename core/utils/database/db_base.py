@@ -295,18 +295,32 @@ class DatabaseBase(ABC):
     For engine Query
     """
 
-    def make_table(self, table_name: str, metadata: MetaData=None) -> Table:
+    def make_table(self, table: Any, metadata: MetaData=None) -> Table:
         """
         创建一个 SQLAlchemy 表对象。
 
-        :param table_name: 表名
+        :param table_name: 表名 或 SQLAlchemy Table 对象
         :param metadata: SQLAlchemy MetaData 对象
         :return: SQLAlchemy Table 对象
         """
-        if not metadata:
-            metadata = MetaData()
-        table = Table(table_name, metadata, autoload_with=self._engine)
-        return table
+        if isinstance(table, str):
+            if not metadata:
+                metadata = MetaData()
+            table_name = table
+            if table_name not in self._table_definitions_cache:
+                table = Table(table, metadata, autoload_with=self._engine)
+                self._table_definitions_cache[table_name] = table
+            table = self._table_definitions_cache[table_name]
+            return table
+        
+        elif isinstance(table, Table):
+            return table
+        
+        # 如果是 orm 对象，直接使用
+        elif hasattr(table, '__table__'):
+            return table.__table__
+        
+        raise ValueError("Invalid table parameter. Must be table name or SQLAlchemy Table object.")
 
     @staticmethod
     def _process_condition(model, key, condition):

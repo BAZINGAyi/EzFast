@@ -155,11 +155,7 @@ class AsyncDB(DatabaseBase):
         :return: 查询结果
         """
         # 如果传入的是字符串，创建Table对象
-        if isinstance(table, str):
-            table = self.make_table(table)
-        # 如果是 orm 对象，直接使用
-        elif hasattr(table, '__table__'):
-            table = table.__table__
+        table = self.make_table(table)
 
         # 转换 select_columns 中的列名字符串为对应的列对象
         if select_columns:
@@ -297,10 +293,7 @@ class AsyncDB(DatabaseBase):
             (table_obj, statistics_key, statistics, start_time) 元组
         """
         # 准备表对象
-        if isinstance(table, str):
-            if table not in self._table_definitions_cache:
-                self._table_definitions_cache[table] = self.make_table(table)
-            table = self._table_definitions_cache[table]
+        table = self.make_table(table)
 
         # 准备统计信息
         if not statistics_key:
