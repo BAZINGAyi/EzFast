@@ -95,11 +95,13 @@ class RawAsyncDB(DatabaseBase):
             final_config = {**default_engine_config, **engine_config}
 
             self._engine: AsyncEngine = create_async_engine(self.config["url"], **final_config)
-            self.logger.debug(f"Async database engine created with config: {list(final_config.keys())}")
+            self.logger.debug(
+                "Async database engine created with config: %s", list(final_config.keys()))
 
         except Exception as e:
-            self.logger.error(f"Async engine creation failed: {str(e)}")
-            raise DatabaseConnectionError(f"Failed to create async database engine: {str(e)}") from e
+            self.logger.error("Async engine creation failed: %s", e, exc_info=True)
+            err_msg = f"Failed to create async database engine: {e}"
+            raise DatabaseConnectionError(err_msg) from e
 
     def _create_session_factory(self) -> None:
         """Create asynchronous session factory."""
@@ -116,7 +118,7 @@ class RawAsyncDB(DatabaseBase):
         final_config = {**default_session_config, **session_config}
 
         self._session_factory = async_sessionmaker(**final_config)
-        self.logger.debug(f"Async session factory created with config: {list(final_config.keys())}")
+        self.logger.debug("Async session factory created with config: %s", list(final_config.keys()))
 
     @asynccontextmanager
     async def get_session(self):
@@ -144,7 +146,8 @@ class RawAsyncDB(DatabaseBase):
                 self.logger.debug("Async session transaction committed successfully")
             except Exception as e:
                 await session.rollback()
-                self.logger.error(f"Async session transaction rolled back due to error: {str(e)}")
+                self.logger.error(
+                    "Async session transaction rolled back due to error: %s", str(e), exc_info=True)
                 raise
 
     async def get_raw_session(self):
@@ -190,7 +193,8 @@ class RawAsyncDB(DatabaseBase):
             self.logger.info("Async database connection test successful")
             return True
         except Exception as e:
-            self.logger.error(f"Async database connection test failed: {str(e)}")
+            self.logger.error(
+                "Async database connection test failed: %s", str(e), exc_info=True)
             return False
 
     async def close(self) -> None:
@@ -229,10 +233,10 @@ class RawAsyncDB(DatabaseBase):
             self._table_definitions_cache[table_name] = table_obj
             return table_obj
 
-        elif isinstance(table, Table):
+        if isinstance(table, Table):
             return table
 
-        elif hasattr(table, "__table__"):
+        if hasattr(table, "__table__"):
             return table.__table__
 
         raise ValueError("Invalid table parameter. Must be table name or SQLAlchemy Table object.")
@@ -350,7 +354,7 @@ class RawAsyncDB(DatabaseBase):
 
         # 执行查询
         rows = await self.execute_query_stmt(stmt, return_clear=return_clear)
-        self.logger.info(f"Query completed, returned {len(rows)} rows")
+        self.logger.info("Query completed, returned %d rows", len(rows))
         return rows
 
     async def scroll_query(
@@ -387,14 +391,15 @@ class RawAsyncDB(DatabaseBase):
         )
 
         total_count = total_count_results[0][0] if total_count_results else 0
-        self.logger.info(f"Scroll query total count: {total_count}")
+        self.logger.info("Scroll query total count: %d", total_count)
 
         if total_count == 0:
             return []
 
         # 计算需要的循环次数
         total_batches = (total_count + batch_size - 1) // batch_size
-        self.logger.debug(f"Scroll query will process {total_batches} batches with batch_size {batch_size}")
+        self.logger.debug(
+            "Scroll query will process %d batches with batch_size %d", total_batches, batch_size)
 
         all_results = []
         for batch_index in range(total_batches):
@@ -415,9 +420,11 @@ class RawAsyncDB(DatabaseBase):
             # 将当前批次的结果添加到总结果中
             if batch_results:
                 all_results.extend(batch_results)
-                self.logger.debug(f"Batch {batch_index + 1}/{total_batches}: fetched {len(batch_results)} rows")
+                self.logger.debug(
+                    "Batch %d/%d: fetched %d rows",
+                    batch_index + 1, total_batches, len(batch_results))
 
-        self.logger.info(f"Scroll query completed, total rows fetched: {len(all_results)}")
+        self.logger.info("Scroll query completed, total rows fetched: %d", len(all_results))
         return all_results
 
     def _init_statistics(self, table_obj: Table, operation_type: str, statistics_key: Optional[str] = None) -> dict:
@@ -483,16 +490,16 @@ class RawAsyncDB(DatabaseBase):
 
         if operation_type == "insert":
             self.logger.info(
-                f"Bulk insert completed: {success_count}/{total_count} records, "
-                f"time: {spent_time}s")
+                "Bulk insert completed: %d/%d records, "
+                "time: %ds", success_count, total_count, spent_time)
         elif operation_type == "update":
             self.logger.info(
-                f"Bulk update completed: {success_count} rows affected from {total_count} records, "
-                f"time: {spent_time}s")
+                "Bulk update completed: %d rows affected from %d records, "
+                "time: %ds", success_count, total_count, spent_time)
         elif operation_type == "sql_execution":
             self.logger.info(
-                f"Bulk SQL execution completed: {success_count} rows affected from {total_count} statements, "
-                f"time: {spent_time}s")
+                "Bulk SQL execution completed: %d rows affected from %d statements, "
+                "time: %ds", success_count, total_count, spent_time)
 
     async def bulk_insert_data(self, table, data: list, statistics_key=None):
         """
@@ -526,11 +533,13 @@ class RawAsyncDB(DatabaseBase):
                     await conn.execute(table.insert(), chunk)
                     await conn.commit()
                     statistics["success"] += len(chunk)
-                    self.logger.debug(f"Inserted chunk {i//chunk_size + 1}: {len(chunk)} records")
+                    self.logger.debug(
+                        "Inserted chunk %d: %d records", i//chunk_size + 1, len(chunk))
                 except Exception as e:
                     status = False
                     err_msg.append(str(e))
-                    self.logger.error(f"Bulk insert failed for chunk {i//chunk_size + 1}: {str(e)}")
+                    self.logger.error(
+                        "Bulk insert failed for chunk %d: %s", i//chunk_size + 1, str(e), exc_info=True)
 
         # set log and spent time
         self._finalize_bulk_operation(statistics, "insert", total_count)
@@ -575,7 +584,7 @@ class RawAsyncDB(DatabaseBase):
             for i in range(0, total_count, chunk_size):
                 chunk = data[i:i + chunk_size]
                 try:
-                   async with conn.begin():
+                    async with conn.begin():
                         chunk_affected_rows = 0
                         for idx, record in enumerate(chunk):
                             # 验证where_key存在
@@ -593,12 +602,14 @@ class RawAsyncDB(DatabaseBase):
 
                         statistics["success"] += chunk_affected_rows
                         self.logger.debug(
-                            f"Updated chunk {i//chunk_size + 1}: {chunk_affected_rows} rows"
-                            f" affected from {len(chunk)} records")
+                            "Updated chunk %d: %d rows affected from %d records",
+                            i//chunk_size + 1, chunk_affected_rows, len(chunk))
                 except Exception as e:
                     status = False
                     err_msg.append(str(e))
-                    self.logger.error(f"Bulk update failed for chunk {i//chunk_size + 1}: {str(e)}")
+                    self.logger.error(
+                        "Bulk update failed for chunk %d: %s", i//chunk_size + 1, str(e),
+                        exc_info=True)
 
         # set log and spent time
         self._finalize_bulk_operation(statistics, "update", total_count)

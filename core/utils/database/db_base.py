@@ -29,20 +29,20 @@ class DatabaseConnectionError(Exception):
 class DatabaseBase(ABC):
     """
     Abstract base class for database operations.
-    
+
     This class provides common functionality for database management including:
     - Configuration parsing and validation
     - Engine creation and management
     - Session factory creation
     - Basic error handling and logging
-    
+
     Subclasses must implement specific sync/async functionality.
     """
-    
+
     def __init__(self, config: Dict[str, Any], logger=None):
         """
         Initialize database base instance.
-        
+
         Args:
             config: Database configuration dictionary containing:
                 - url: Database connection URL (required)
@@ -50,7 +50,7 @@ class DatabaseBase(ABC):
                 - engine: Engine-specific configuration (optional)
                 - session: Session-specific configuration (optional)
             logger: Optional logger instance. If not provided, uses standard logging module.
-        
+
         Raises:
             DatabaseConfigError: If configuration is invalid
         """
@@ -58,45 +58,45 @@ class DatabaseBase(ABC):
         self._engine: Optional[Engine] = None
         self._session_factory = None
         self._is_initialized = False
-        
+
         # Set up logger instance
         if logger is not None:
             self.logger = logger
         else:
             self.logger = logging.getLogger(__name__)
-        
+
         # Validate and setup database
         self._validate_config()
         self._setup_database()
-        
+
         self.logger.info(f"Database initialized with URL: {self._get_safe_url()}")
-            
+
         # 设置需要查询表定义时的缓存结构
         self._table_definitions_cache = {}
 
     def _validate_config(self) -> None:
         """
         Validate database configuration.
-        
+
         Raises:
             DatabaseConfigError: If required configuration is missing or invalid
         """
         if not isinstance(self.config, dict):
             raise DatabaseConfigError("Config must be a dictionary")
-        
+
         if "url" not in self.config:
             raise DatabaseConfigError("Database URL is required in config")
-        
+
         if not self.config["url"]:
             raise DatabaseConfigError("Database URL cannot be empty")
-        
+
         # Set default values
         self.config.setdefault("echo", False)
         self.config.setdefault("engine", {})
         self.config.setdefault("session", {})
-        
+
         self.logger.debug("Database configuration validated successfully")
-    
+
     def _setup_database(self) -> None:
         """Setup database engine and session factory."""
         try:
@@ -107,23 +107,23 @@ class DatabaseBase(ABC):
         except Exception as e:
             self.logger.error(f"Database setup failed: {str(e)}")
             raise DatabaseConnectionError(f"Failed to setup database: {str(e)}") from e
-    
+
     def _create_engine(self) -> None:
         """
         Create SQLAlchemy engine based on configuration.
-        
+
         Raises:
             DatabaseConnectionError: If engine creation fails
         """
         try:
             engine_config = self.config["engine"].copy()
-            
+
             # Apply default engine configuration
             default_engine_config = {
                 "echo": self.config["echo"],
                 "future": True,  # Use SQLAlchemy 2.0 style
             }
-            
+
             # Handle SQLite specific configuration
             if self.config["url"].startswith("sqlite"):
                 # For SQLite, use StaticPool for better compatibility
@@ -140,30 +140,30 @@ class DatabaseBase(ABC):
                     "pool_recycle": 3600,
                     "pool_pre_ping": True
                 })
-            
+
             # Merge with user configuration (user config takes precedence)
             final_config = {**default_engine_config, **engine_config}
-            
+
             self._engine = create_engine(self.config["url"], **final_config)
             self.logger.debug(f"Database engine created with config: {list(final_config.keys())}")
-            
+
         except Exception as e:
             self.logger.error(f"Engine creation failed: {str(e)}")
             raise DatabaseConnectionError(f"Failed to create database engine: {str(e)}") from e
-    
+
     @abstractmethod
     def _create_session_factory(self) -> None:
         """
         Create session factory. Must be implemented by subclasses.
-        
+
         This method should create appropriate session factory for sync/async operations.
         """
         pass
-    
+
     def _get_safe_url(self) -> str:
         """
         Get database URL with password masked for logging.
-        
+
         Returns:
             Safe database URL with password replaced by asterisks
         """
@@ -177,11 +177,11 @@ class DatabaseBase(ABC):
                     username, _ = credentials.split(":", 1)
                     return f"{scheme}://{username}:***@{host_db}"
         return url
-    
+
     def test_connection(self) -> bool:
         """
         Test database connection.
-        
+
         Returns:
             True if connection successful, False otherwise
         """
@@ -194,24 +194,24 @@ class DatabaseBase(ABC):
         except Exception as e:
             self.logger.error(f"Database connection test failed: {str(e)}")
             return False
-    
+
     def get_conn(self):
         """
         Get database connection with retry mechanism.
-        
+
         Returns:
             SQLAlchemy connection instance
-            
+
         Raises:
             DatabaseConnectionError: If database is not initialized or connection fails after retries
         """
         if not self._is_initialized or self._engine is None:
             raise DatabaseConnectionError("Database not initialized")
-        
+
         import time
         max_retries = 3
         retry_delay = 0.5  # seconds
-        
+
         for attempt in range(max_retries):
             try:
                 # Create and test connection
@@ -221,7 +221,7 @@ class DatabaseBase(ABC):
                 return conn
             except Exception as e:
                 self.logger.warning(f"Database connection failed on attempt {attempt + 1}/{max_retries}: {str(e)}")
-                
+
                 if attempt < max_retries - 1:
                     # Wait before retrying
                     time.sleep(retry_delay)
@@ -234,63 +234,63 @@ class DatabaseBase(ABC):
     def get_engine(self) -> Engine:
         """
         Get database engine.
-        
+
         Returns:
             SQLAlchemy engine instance
-            
+
         Raises:
             DatabaseConnectionError: If database is not initialized
         """
         if not self._is_initialized or self._engine is None:
             raise DatabaseConnectionError("Database not initialized")
         return self._engine
-    
+
     def close(self) -> None:
         """Close database connections and cleanup resources."""
         if self._engine:
             self._engine.dispose()
             self.logger.info("Database connections closed")
-        
+
         self._engine = None
         self._session_factory = None
         self._is_initialized = False
-    
+
     def __enter__(self):
         """Context manager entry."""
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit."""
         self.close()
-    
+
     @abstractmethod
     def get_session(self) -> Union[Session, ContextManager[Session]]:
         """
         Get database session. Must be implemented by subclasses.
-        
+
         Returns:
             Database session (sync) or session context manager (async)
         """
         pass
-    
+
     @abstractmethod
     def execute_query(self, query: str, params: Optional[Dict[str, Any]] = None) -> Any:
         """
         Execute a raw SQL query. Must be implemented by subclasses.
-        
+
         Args:
             query: SQL query string
             params: Query parameters (optional)
-            
+
         Returns:
             Query result
         """
         pass
-    
+
     def __repr__(self) -> str:
         """String representation of database instance."""
         return f"{self.__class__.__name__}(url='{self._get_safe_url()}')"
-    
+
     """
     For engine Query
     """
@@ -312,14 +312,14 @@ class DatabaseBase(ABC):
                 self._table_definitions_cache[table_name] = table
             table = self._table_definitions_cache[table_name]
             return table
-        
-        elif isinstance(table, Table):
+
+        if isinstance(table, Table):
             return table
-        
+
         # 如果是 orm 对象，直接使用
-        elif hasattr(table, '__table__'):
+        if hasattr(table, '__table__'):
             return table.__table__
-        
+
         raise ValueError("Invalid table parameter. Must be table name or SQLAlchemy Table object.")
 
     @staticmethod
@@ -344,11 +344,11 @@ class DatabaseBase(ABC):
             >>> # 等值查询
             >>> condition = {"operator": "=", "value": "John"}
             >>> expr = DatabaseBase._process_condition(table.c, "name", condition)
-            
+
             >>> # LIKE 查询
             >>> condition = {"operator": "LIKE", "value": "John"}
             >>> expr = DatabaseBase._process_condition(table.c, "name", condition)
-            
+
             >>> # IN 查询
             >>> condition = {"operator": "IN", "value": ["active", "pending"]}
             >>> expr = DatabaseBase._process_condition(table.c, "status", condition)
@@ -401,7 +401,7 @@ class DatabaseBase(ABC):
             return getattr(model, key) <= value
 
         return None
-    
+
     @classmethod
     def _handle_logic_conditions(cls, model, conditions_dict, logic_type):
         """处理 AND 或 OR 的复杂逻辑条件，支持递归嵌套。
@@ -428,7 +428,7 @@ class DatabaseBase(ABC):
             ...     {"status": {"operator": "=", "value": "active"}}
             ... ]
             >>> expr = DatabaseBase._handle_logic_conditions(table, conditions, "and")
-            
+
             >>> # 嵌套逻辑处理
             >>> conditions = [
             ...     {"and": [{"age": {"operator": ">", "value": 18}}]},
@@ -459,7 +459,7 @@ class DatabaseBase(ABC):
         elif logic_type == "or":
             return or_(*logical_conditions)
         return logical_conditions
-    
+
     @classmethod
     def build_where_conditions(cls, model, where_conditions):
         """构建 SQLAlchemy 查询条件，支持复杂的逻辑组合和多种操作符。
@@ -488,7 +488,7 @@ class DatabaseBase(ABC):
             >>> # 简单条件
             >>> conditions = {"name": {"operator": "=", "value": "John"}}
             >>> where_clause = DatabaseBase.build_where_conditions(table, conditions)
-            
+
             >>> # 复杂逻辑条件
             >>> conditions = {
             ...     "and": [
@@ -509,7 +509,7 @@ class DatabaseBase(ABC):
         # transfer orm to core
         if hasattr(model, '__table__'):
             model = model.__table__
-        
+
         conditions = []
 
         # 遍历 where_conditions 中的条件，递归处理 and/or 条件
