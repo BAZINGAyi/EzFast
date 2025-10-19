@@ -19,13 +19,13 @@ from core.utils.async_tools import async_wrap
 class AsyncDB(DatabaseBase):
     """
     Asynchronous database implementation using engine-based operations.
-    
+
     This class provides asynchronous database operations with run_query functionality
     integrated from the reference implementation.
-    
-    Note: Uses synchronous engine with async_wrap decorator to convert 
+
+    Note: Uses synchronous engine with async_wrap decorator to convert
     blocking operations to async as per design requirements.
-    
+
     Example:
         # Initialize with configuration
         config = {
@@ -33,9 +33,9 @@ class AsyncDB(DatabaseBase):
             "echo": False,
             "engine": {"pool_size": 5}
         }
-        
+
         db = AsyncDB(config)
-        
+
         # Use run_query for complex queries
         results = await db.run_query(
             table="users",
@@ -50,15 +50,15 @@ class AsyncDB(DatabaseBase):
             limit=10
         )
     """
-    
+
     # Chunk sizes for batch operations
     chunk_size = 2000  # For bulk insert operations
-    
+
     def _create_session_factory(self) -> None:
         """Create synchronous session factory."""
-        
+
         session_config = self.config["session"].copy()
-        
+
         # Apply default session configuration
         default_session_config = {
             "bind": self._engine,
@@ -66,26 +66,26 @@ class AsyncDB(DatabaseBase):
             "autoflush": True,
             "expire_on_commit": True
         }
-        
+
         # Merge with user configuration
         final_config = {**default_session_config, **session_config}
-        
+
         self._session_factory = sessionmaker(**final_config)
         self.logger.debug(f"Sync session factory created with config: {list(final_config.keys())}")
-    
+
     @contextmanager
     def get_session(self) -> Generator[Session, None, None]:
         """
         Get database session with automatic transaction management.
-        
+
         This context manager automatically handles:
         - Session creation and cleanup
         - Transaction commit on success
         - Transaction rollback on exception
-        
+
         Yields:
             Database session
-            
+
         Example:
             with db.get_session() as session:
                 user = User(name="John")
@@ -108,7 +108,7 @@ class AsyncDB(DatabaseBase):
     def execute_query(self, query: str, params: Optional[Dict[str, Any]] = None):
         """
         Execute query not implemented for engine-based operations.
-        
+
         Raises:
             NotImplementedError: Execute query functionality not implemented
         """
@@ -143,7 +143,7 @@ class AsyncDB(DatabaseBase):
     ):
         """
         执行一个通用查询，支持WHERE、ORDER BY、GROUP BY等操作。
-        
+
         :param table: 表对象或表名字符串
         :param select_columns: 选择的列，可以传入列名字符串列表
         :param where_conditions: WHERE 条件（字典形式）
@@ -164,7 +164,7 @@ class AsyncDB(DatabaseBase):
                 if isinstance(col, str) else col for col in select_columns]
         else:
             select_columns = [table]
-            
+
         # 如果 group_by_columns 存在，则默认添加 COUNT() 作为 select_column
         if group_by_columns:
             # 确保 group_by_columns 中的列对象也被正确转换
@@ -172,7 +172,7 @@ class AsyncDB(DatabaseBase):
                 getattr(table.c, col)
                 if isinstance(col, str) else col for col in group_by_columns]
             select_columns.append(func.count().label("count"))
-        
+
         # 基本查询
         stmt = select(*select_columns).select_from(table)
 
@@ -205,7 +205,7 @@ class AsyncDB(DatabaseBase):
         # 添加 LIMIT
         if limit:
             stmt = stmt.limit(limit)
-            
+
         # 添加 OFFSET
         if offset:
             stmt = stmt.offset(offset)
@@ -215,7 +215,7 @@ class AsyncDB(DatabaseBase):
         rows = await self.execute_query_stmt(stmt, return_clear=return_clear)
         self.logger.info(f"Query completed, returned {len(rows)} rows")
         return rows
-    
+
     async def scroll_query(
         self,
         table,
@@ -228,7 +228,7 @@ class AsyncDB(DatabaseBase):
     ):
         """
         滚动查询功能，先查询总记录数，然后循环遍历整个结果集，每次限制指定数量的记录。
-        
+
         :param table: 表对象或表名字符串
         :param select_columns: 选择的列，可以传入列名字符串列表
         :param where_conditions: WHERE 条件（字典形式）
@@ -245,21 +245,21 @@ class AsyncDB(DatabaseBase):
             where_conditions=where_conditions,
             group_by_columns=group_by_columns
         )
-        
+
         total_count = total_count_results[0][0] if total_count_results else 0
         self.logger.info(f"Scroll query total count: {total_count}")
-        
+
         if total_count == 0:
             return []
-        
+
         # 计算需要的循环次数
         total_batches = (total_count + batch_size - 1) // batch_size
         self.logger.debug(f"Scroll query will process {total_batches} batches with batch_size {batch_size}")
-        
+
         all_results = []
         for batch_index in range(total_batches):
             offset = batch_index * batch_size
-            
+
             # 调用 run_query 获取当前批次的数据
             batch_results = await self.run_query(
                 table=table,
@@ -271,36 +271,33 @@ class AsyncDB(DatabaseBase):
                 offset=offset,
                 return_clear=return_clear,
             )
-            
+
             # 将当前批次的结果添加到总结果中
             if batch_results:
                 all_results.extend(batch_results)
                 self.logger.debug(f"Batch {batch_index + 1}/{total_batches}: fetched {len(batch_results)} rows")
-                
+
         self.logger.info(f"Scroll query completed, total rows fetched: {len(all_results)}")
         return all_results
 
-    def _prepare_bulk_operation(self, table, operation_type: str, statistics_key: Optional[str] = None):
+    def _init_statistics(self, table_obj: Table, operation_type: str, statistics_key: Optional[str] = None) -> dict:
         """
-        准备批量操作的通用初始化。
-        
-        Args:
-            table: 表对象或表名字符串
-            operation_type: 操作类型 ('insert', 'update', 'delete')
-            statistics_key: 自定义统计键名
-            
-        Returns:
-            (table_obj, statistics_key, statistics, start_time) 元组
-        """
-        # 准备表对象
-        table = self.make_table(table)
+        初始化批量操作的统计信息。
 
+        Args:
+            table_obj: SQLAlchemy Table 对象（必须是已准备好的对象）
+            operation_type: 操作类型 ('insert', 'update', 'delete', 'sql_execution')
+            statistics_key: 自定义统计键名，可以是字符串或整数
+
+        Returns:
+            statistics: 统计信息字典
+        """
         # 准备统计信息
         if not statistics_key:
-            statistics_key = f"{table.name}_{operation_type}"
+            statistics_key = f"{table_obj.name}_{operation_type}"
         # 同一事务针对同一张表多次操作，防止被覆盖
         elif isinstance(statistics_key, int):
-            statistics_key = f"{table.name}_{operation_type}_{statistics_key}"
+            statistics_key = f"{table_obj.name}_{operation_type}_{statistics_key}"
 
         start_time = time.time()
         statistics = {
@@ -310,12 +307,29 @@ class AsyncDB(DatabaseBase):
             "spent_time": start_time
         }
 
+        return statistics
+
+    def _prepare_bulk_operation(self, table, operation_type: str, statistics_key: Optional[str] = None):
+        """
+        准备批量操作的通用初始化。
+
+        Args:
+            table: 表对象或表名字符串
+            operation_type: 操作类型 ('insert', 'update', 'delete')
+            statistics_key: 自定义统计键名
+
+        Returns:
+            (table_obj, statistics_key, statistics, start_time) 元组
+        """
+        # 准备表对象
+        table = self.make_table(table)
+        statistics = self._init_statistics(table, operation_type, statistics_key)
         return table, statistics
 
     def _finalize_bulk_operation(self, statistics: dict, operation_type: str, total: int) -> None:
         """
         完成批量操作的通用结束处理。
-        
+
         Args:
             statistics: 统计信息字典 {"total": 0, "success": 0, "spent_time": time.time()}
             operation_type: 操作类型
@@ -326,7 +340,7 @@ class AsyncDB(DatabaseBase):
         total_count = statistics["total"]
         success_count = statistics["success"]
         spent_time = statistics["spent_time"]
-        
+
         if operation_type == "insert":
             self.logger.info(
                 f"Bulk insert completed: {success_count}/{total_count} records, "
@@ -344,7 +358,7 @@ class AsyncDB(DatabaseBase):
     def bulk_insert_data(self, table, data: list, statistics_key=None):
         """
         插入数据到数据库。适用于大数据量同一张表操作。
-        
+
         :param data: 要插入的数据列表，每个元素为字典
         :param table: SQLAlchemy 表对象
         :param statistics_key: 统计信息的键名，如果不提供则使用表名_insert
@@ -356,13 +370,13 @@ class AsyncDB(DatabaseBase):
         # 使用公共方法初始化
         table, statistics = self._prepare_bulk_operation(table, "insert", statistics_key)
         total_count = len(data)
-        
+
         if total_count == 0:
             return True, [], statistics
-            
+
         status, err_msg = True, []
         chunk_size = self.chunk_size
-        
+
         with self.get_conn() as conn:
             for i in range(0, total_count, chunk_size):
                 chunk = data[i:i + chunk_size]
@@ -384,16 +398,16 @@ class AsyncDB(DatabaseBase):
     def bulk_update_data(self, table, data: list, where_key: str = "id", statistics_key: Optional[str] = None):
         """
         批量更新数据库中的数据。专用于大数据量、基于单一字段的简单更新场景。
-        
+
         Args:
             table: SQLAlchemy表对象或表名字符串
             data: 要更新的数据列表，每个元素为字典，必须包含where_key字段
             where_key: 用于WHERE条件的字段名，默认为"id"
             statistics_key: 统计信息的键名，如果不提供则使用表名_update
-            
+
         Returns:
             tuple: (status, err_msg, statistics) 元组
-                
+
         Example:
             >>> # 基于ID字段的批量更新
             >>> update_data = [
@@ -401,7 +415,7 @@ class AsyncDB(DatabaseBase):
             ...     {"id": 2, "name": "Bob Updated", "email": "bob.new@test.com"}
             ... ]
             >>> await db.bulk_update_data("users", update_data, where_key="id")
-            
+
         Note:
             - 每个记录必须包含where_key字段
             - 适用于大数据量的简单更新
@@ -412,10 +426,10 @@ class AsyncDB(DatabaseBase):
 
         if total_count == 0:
             return True, [], statistics
-            
+
         status, err_msg = True, []
         chunk_size = self.chunk_size
-        
+
         with self.get_conn() as conn:
             for i in range(0, total_count, chunk_size):
                 chunk = data[i:i + chunk_size]
@@ -431,7 +445,7 @@ class AsyncDB(DatabaseBase):
                             # 构建WHERE条件, 去除where_key字段
                             condition = getattr(table.c, where_key) == record[where_key]
                             update_data = {k: v for k, v in record.items() if k != where_key}
-                            
+
                             update_stmt = table.update().where(condition).values(update_data)
                             result = conn.execute(update_stmt)
                             chunk_affected_rows += result.rowcount
@@ -461,10 +475,10 @@ class AsyncDB(DatabaseBase):
                 - operation: 操作类型，'insert', 'update', 'delete' 之一
                 - where_conditions: WHERE条件字典（仅用于更新操作），可选
             open_transaction (bool): 是否开启事务，默认为True。当为False时，每个操作独立执行，不在事务中包装
-            
+
         Returns:
             tuple: (success, error_messages, statistics) 元组
-                
+
         Example:
             >>> table_operations = [
             ...     {
@@ -473,7 +487,7 @@ class AsyncDB(DatabaseBase):
             ...         "operation": "insert"
             ...     },
             ...     {
-            ...         "table": "orders", 
+            ...         "table": "orders",
             ...         "data": {"status": "completed"},
             ...         "operation": "update",
             ...         "where_conditions": {"id": {"operator": "=", "value": 1}}
@@ -494,9 +508,14 @@ class AsyncDB(DatabaseBase):
             raise ValueError("table_data must be a non-empty list")
 
         statistics_list, error_messages = [], []
-        
+
         try:
             with self.get_conn() as conn:
+                # 预加载所有需要的表结构（在事务开始前，避免事务内的独立连接冲突）
+                for operation_data in table_data:
+                    table = operation_data['table']
+                    operation_data['table'] = self.make_table(table)
+
                 # 根据open_transaction参数决定是否使用事务
                 if open_transaction:
                     with conn.begin():  # 开始事务
@@ -504,20 +523,20 @@ class AsyncDB(DatabaseBase):
                 else:
                     # 不使用事务，每个操作独立执行
                     self._execute_bulk_operations(conn, table_data, statistics_list, error_messages)
-                            
+
         except Exception as e:
             # 操作失败，记录总体错误
             general_error = f"Bulk operations failed: {str(e)}"
             error_messages.append(general_error)
             self.logger.error(general_error)
-        
+
         transaction_success = len(error_messages) == 0
         return transaction_success, error_messages, statistics_list
 
     def _execute_bulk_operations(self, conn, table_data: list, statistics_list: list, error_messages: list):
         """
         执行批量操作的核心逻辑。
-        
+
         Args:
             conn: 数据库连接对象
             table_data: 表操作数据列表
@@ -529,17 +548,16 @@ class AsyncDB(DatabaseBase):
                 table = operation_data['table']
                 operation = operation_data['operation']
                 affected_rows = 0
-                
+
                 # 初始化统计
-                table, stati_info = self._prepare_bulk_operation(
-                    table, operation, i)
+                stati_info = self._init_statistics(table, operation, i)
 
                 # 执行不同类型的操作
                 if operation == 'insert':
                     data = operation_data['data']
                     conn.execute(table.insert(), data)
                     affected_rows = len(data)
-                    
+
                 elif operation == 'update':
                     data = operation_data['data']
                     where_conditions = operation_data['where_conditions']
@@ -549,14 +567,14 @@ class AsyncDB(DatabaseBase):
                     update_stmt = table.update().where(condition).values(data)
                     result = conn.execute(update_stmt)
                     affected_rows += result.rowcount
-                        
+
                 elif operation == 'delete':
                     where_conditions = operation_data['where_conditions']
                     condition = self.build_where_conditions(table, where_conditions)
                     delete_stmt = table.delete().where(condition)
                     result = conn.execute(delete_stmt)
                     affected_rows = result.rowcount
-                    
+
                 else:
                     raise ValueError(f"Unsupported operation: {operation}")
 
@@ -574,15 +592,15 @@ class AsyncDB(DatabaseBase):
     def bulk_dml_table_sql(self, sql_statements: list, open_transaction: bool = True) -> tuple:
         """
         批量执行原生SQL语句（增删改操作）。
-        
+
         Args:
             sql_statements (list): SQL语句字符串列表
             open_transaction (bool): 是否开启事务，默认为True
             statistics_key (str, optional): 统计信息的键名
-            
+
         Returns:
             tuple: (success, error_messages, statistics_list) 元组
-                
+
         Example:
             >>> sql_statements = [
             ...     "INSERT INTO users (name, email) VALUES ('Alice', 'alice@test.com')",
@@ -593,7 +611,7 @@ class AsyncDB(DatabaseBase):
             >>> success, errors, stats = await db.bulk_dml_table_sql(sql_statements)
             >>> # 不使用事务
             >>> success, errors, stats = await db.bulk_dml_table_sql(sql_statements, open_transaction=False)
-            
+
         Note:
             - 直接执行SQL语句，请确保SQL安全性
             - 支持事务控制
@@ -606,26 +624,26 @@ class AsyncDB(DatabaseBase):
         total_count = len(sql_statements)
         if total_count == 0:
             return True, [], []
-            
+
         status, error_messages, statistics_list = True, [], []
-        
-        def execute_sql():
-            for i, sql in enumerate(sql_statements):    
+
+        def execute_sql(conn):
+            for i, sql in enumerate(sql_statements):
                 try:
                     # 为每个SQL语句创建独立的统计信息
-                    _, statistics = self._prepare_bulk_operation(i, "", "sql_execution_" + str(i))
-                    
+                    statistics = self._init_statistics(i, "", "sql_execution_" + str(i))
+
                     # 执行SQL语句
                     result = conn.execute(text(sql))
-                    
+
                     # 获取影响的行数
                     affected_rows = result.rowcount if hasattr(result, 'rowcount') else 0
                     statistics["success"] = affected_rows
-                    
+
                     # 完成统计
                     self._finalize_bulk_operation(statistics, "sql_execution", 1)
                     statistics_list.append(statistics)
-                    
+
                 except Exception as e:
                     error_msg = f"SQL statement {i+1} failed: {str(e)} | SQL: {sql}"
                     raise Exception(error_msg)  # 重新抛出异常，在事务模式下会触发回滚
@@ -635,32 +653,32 @@ class AsyncDB(DatabaseBase):
                 # 根据open_transaction参数决定是否使用事务
                 if open_transaction:
                     with conn.begin():  # 开始事务
-                        execute_sql()
+                        execute_sql(conn)
                 else:
-                    execute_sql()
+                    execute_sql(conn)
         except Exception as e:
             # 操作失败，记录总体错误
             general_error = f"Bulk SQL execution failed: {str(e)}"
             error_messages.append(general_error)
             self.logger.error(general_error)
             status = False
-        
+
         return status, error_messages, statistics_list
 
     @async_wrap
     def add(self, model_class, data: Dict[str, Any]) -> tuple:
         """
         使用 ORM 方式添加单条记录到表中。
-        
+
         Args:
             model_class: SQLAlchemy ORM 模型类
             data (Dict[str, Any]): 要插入的数据，键值对形式
-            
+
         Returns:
             tuple: (success, result)
                 - success (bool): 操作是否成功
                 - result: 成功时返回包含 ID 的字典，失败时返回错误信息字符串
-            
+
         Example:
             >>> from core.models.user_models import User
             >>> # 添加用户记录
@@ -673,7 +691,7 @@ class AsyncDB(DatabaseBase):
             ...     print(f"Created user with ID: {result['id']}")
             ... else:
             ...     print(f"Error: {result}")
-            
+
         Note:
             - 使用 ORM 模型类进行操作
             - 成功时返回包含 ID 的字典
@@ -688,7 +706,7 @@ class AsyncDB(DatabaseBase):
                 # 刷新以获取自动生成的 ID 等信息
                 session.flush()
                 session.refresh(instance)
-                
+
                 # 构建返回字典，包含 ID
                 result = instance.to_dict()
                 return True, result
@@ -698,21 +716,21 @@ class AsyncDB(DatabaseBase):
             self.logger.error(error_msg)
             return False, error_msg
 
-    @async_wrap  
+    @async_wrap
     def update(self, model_class, data: Dict[str, Any], filter_condition) -> tuple:
         """
         使用 ORM 方式更新表中符合条件的记录。
-        
+
         Args:
             model_class: SQLAlchemy ORM 模型类
             data (Dict[str, Any]): 要更新的数据，键值对形式
             filter_condition: 过滤条件，直接传入 SQLAlchemy 条件表达式
-            
+
         Returns:
             tuple: (success, result)
                 - success (bool): 操作是否成功
                 - result: 成功时返回包含受影响行数的字典，失败时返回错误信息字符串
-            
+
         Example:
             >>> from core.models.user_models import User
             >>> # 使用简单条件更新
@@ -725,14 +743,14 @@ class AsyncDB(DatabaseBase):
             ...     print(f"Updated {result['affected_rows']} rows")
             ... else:
             ...     print(f"Error: {result}")
-            
+
             >>> # 使用复杂条件更新
             >>> success, result = await db.update(
             ...     User,
             ...     {'status': 'inactive'},
             ...     User.name.like("A%")
             ... )
-            
+
             >>> # 使用多个条件
             >>> from sqlalchemy import and_
             >>> success, result = await db.update(
@@ -740,7 +758,7 @@ class AsyncDB(DatabaseBase):
             ...     {'status': 'active'},
             ...     and_(User.age > 18, User.email.like("%@gmail.com"))
             ... )
-            
+
         Note:
             - 使用 ORM 模型类进行操作
             - 直接传入 SQLAlchemy 条件表达式
@@ -761,20 +779,20 @@ class AsyncDB(DatabaseBase):
             self.logger.error(error_msg)
             return False, error_msg
 
-    @async_wrap  
+    @async_wrap
     def delete(self, model_class, filter_condition) -> tuple:
         """
         使用 ORM 方式删除表中符合条件的记录。
-        
+
         Args:
             model_class: SQLAlchemy ORM 模型类
             filter_condition: 过滤条件，直接传入 SQLAlchemy 条件表达式
-            
+
         Returns:
             tuple: (success, result)
                 - success (bool): 操作是否成功
                 - result: 成功时返回包含删除行数的字典，失败时返回错误信息字符串
-            
+
         Example:
             >>> from core.models.user_models import User
             >>> # 使用简单条件删除
@@ -786,20 +804,20 @@ class AsyncDB(DatabaseBase):
             ...     print(f"Deleted {result['deleted_rows']} rows")
             ... else:
             ...     print(f"Error: {result}")
-            
+
             >>> # 使用复杂条件删除
             >>> success, result = await db.delete(
             ...     User,
             ...     User.status == 'inactive'
             ... )
-            
+
             >>> # 使用多个条件
             >>> from sqlalchemy import and_
             >>> success, result = await db.delete(
             ...     User,
             ...     and_(User.age < 18, User.status == 'pending')
             ... )
-            
+
         Note:
             - 使用 ORM 模型类进行操作
             - 直接传入 SQLAlchemy 条件表达式
