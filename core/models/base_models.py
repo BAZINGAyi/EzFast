@@ -14,7 +14,7 @@ class CommonModelMixin:
     id: Mapped[int] = mapped_column(
         Integer, primary_key=True, autoincrement=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), 
+        DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc)
     )
     updated_at: Mapped[datetime] = mapped_column(
@@ -22,9 +22,9 @@ class CommonModelMixin:
         default=lambda: datetime.now(china_tz),
         onupdate=lambda: datetime.now(china_tz)
     )
-    
-    description: Mapped[str] = mapped_column(Text)
-    
+
+    description: Mapped[str] = mapped_column(Text, nullable=True)
+
     def to_dict(self) -> Dict[str, Any]:
         """把 ORM 对象转换成字典"""
         return {
