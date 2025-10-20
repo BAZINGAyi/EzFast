@@ -21,6 +21,9 @@ from core import (
 
 from core.models.user_models import Permission, User, Role, Module, RoleModulePermission
 from core.config import settings
+from core.models.user_models import User
+from core.dynamic_api_manager import HTTP_FAILED, HTTP_SUCCESS, DynamicApiManager
+from core.models.user_models import Module
 
 # 创建系统 API 路由器
 router = APIRouter()
@@ -52,9 +55,6 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
         "token_type": "bearer",
         "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60 * 2
     }
-
-from core.models.user_models import User
-from core.dynamic_api_manager import HTTP_FAILED, HTTP_SUCCESS, DynamicApiManager
 
 # User API
 class CommonUserSchema(BaseModel):
@@ -166,7 +166,6 @@ permission_config = {
 permission_router = DynamicApiManager(Permission, permission_config).get_router()
 
 # Module API
-from core.models.user_models import Module
 module_config = {
     'module_name': "Module",
     'create': {'permission_name': "WRITE"},
