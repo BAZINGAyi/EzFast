@@ -20,10 +20,10 @@ from core.constant import HTTP_FAILED, HTTP_SUCCESS
 class FilterRequest(BaseModel):
     """
     过滤查询请求模型
-    
+
     用于动态API的过滤查询功能，支持复杂的条件查询、排序、分组和分页。
     """
-    
+
     where_conditions: Optional[Dict[str, Any]] = Field(
         None,
         title="WHERE查询条件",
@@ -42,7 +42,7 @@ class FilterRequest(BaseModel):
             ]
         }
     )
-    
+
     select_columns: Optional[List[str]] = Field(
         None,
         title="查询列名",
@@ -56,7 +56,7 @@ class FilterRequest(BaseModel):
         ),
         example=["id", "username", "email", "created_at"]
     )
-    
+
     order_by_columns: Optional[List[str]] = Field(
         None,
         title="排序列名",
@@ -69,7 +69,7 @@ class FilterRequest(BaseModel):
         ),
         example=["created_at DESC", "username", "id"]
     )
-    
+
     group_by_columns: Optional[List[str]] = Field(
         None,
         title="分组列名",
@@ -83,7 +83,7 @@ class FilterRequest(BaseModel):
         ),
         example=["department", "status"]
     )
-    
+
     limit: Optional[int] = Field(
         50,
         title="查询限制",
@@ -99,7 +99,7 @@ class FilterRequest(BaseModel):
         le=100000,
         example=100
     )
-    
+
     offset: Optional[int] = Field(
         0,
         title="查询偏移量",
@@ -116,7 +116,7 @@ class FilterRequest(BaseModel):
         ge=0,
         example=0
     )
-    
+
 class ReponseModel(BaseModel):
     code: int
     msg: str
@@ -125,14 +125,14 @@ class ReponseModel(BaseModel):
 class DynamicApiManager:
     """
     动态 API 管理器
-    
+
     根据 SQLAlchemy 模型和配置自动生成 CRUD API
     """
-    
+
     def __init__(self, model: Type[DeclarativeBase], config: Dict[str, Any]):
         """
         初始化动态 API 管理器
-        
+
         Args:
             model: SQLAlchemy 模型类
             config: API 配置字典
@@ -140,37 +140,37 @@ class DynamicApiManager:
         self.model = model
         self.config = config
         self.router = APIRouter()
-        
+
         # 获取模型信息
         self.table_name = model.__tablename__
         self.model_name = model.__name__
         self.module_name = config.get('module_name', self.model_name)
-        
+
         # 生成 Pydantic 模型
         self._generate_schemas()
-        
+
         # 注册路由
         self._register_routes()
-    
+
     def _apply_schema_filter(self, data: Any, validate_schema: Optional[Type[BaseModel]]) -> Any:
         """
         应用Schema过滤，只返回Schema定义的字段
-        
+
         Args:
             data: 原始数据（单个字典或字典列表）
             validate_schema: 可选的Pydantic模型类
-            
+
         Returns:
             过滤后的数据
         """
         if not validate_schema or not data:
-            return data 
-        
+            return data
+
         # 处理单个字典
         if isinstance(data, dict):
             schema_instance = validate_schema(**data)
             return schema_instance.model_dump()
-        
+
         # 处理字典列表
         elif isinstance(data, list):
             filtered_data = []
@@ -181,77 +181,77 @@ class DynamicApiManager:
                 else:
                     filtered_data.append(item)
             return filtered_data
-        
+
         return data
-            
-    
+
+
     def _generate_schemas(self):
         """生成 Pydantic 模型用于请求和响应"""
         # 获取 SQLAlchemy 模型的字段信息
         mapper = inspect(self.model)
-        
+
         # 构建字段字典
         fields = {}
         response_fields = {}
-        
+
         for column in mapper.columns:
             column_name = column.name
             python_type = column.type.python_type
-            
+
             # 处理可选字段
             if column.nullable:
                 python_type = Optional[python_type]
-            
+
             # 响应模型包含所有字段
             response_fields[column_name] = (python_type, ...)
-            
+
             # 创建和更新模型排除自动生成的字段
             if column_name not in ['id', 'created_at', 'updated_at']:
                 if column.nullable or column.default is not None:
                     fields[column_name] = (python_type, None)
                 else:
                     fields[column_name] = (python_type, ...)
-        
+
         # 创建 Pydantic 模型
         self.CreateSchema = create_model(
             f"{self.model_name}Create",
             **fields
         )
-        
+
         self.UpdateSchema = create_model(
             f"{self.model_name}Update",
             **{k: (v[0], None) for k, v in fields.items()}  # 更新时所有字段都是可选的
         )
-        
+
         self.ResponseSchema = create_model(
             f"{self.model_name}Response",
             **response_fields
         )
-    
+
     def _register_routes(self):
         """注册所有 CRUD 路由"""
         prefix = f"/{self.table_name}"
-        
+
         # 注册各种操作
         if 'create' in self.config:
             self._register_create_route(prefix)
-        
+
         if 'read_one' in self.config:
             self._register_read_one_route(prefix)
-        
+
         if 'read_filter' in self.config:
             self._register_read_filter_route(prefix)
-        
+
         if 'update' in self.config:
             self._register_update_route(prefix)
-        
+
         if 'delete' in self.config:
             self._register_delete_route(prefix)
 
     def _register_create_route(self, prefix: str):
         """注册创建路由"""
         permission_name = self.config['create']['permission_name']
-        
+
         @self.router.post(
             prefix,
             summary=f"Create {self.model_name}",
@@ -260,7 +260,7 @@ class DynamicApiManager:
             response_model=ReponseModel
         )
         @require_auth(
-            module_name=self.module_name, 
+            module_name=self.module_name,
             permission_names=[permission_name]
         )
         async def create_handler(request: Request, data: self.CreateSchema): # type: ignore
@@ -269,7 +269,7 @@ class DynamicApiManager:
             data = data.model_dump()
             status, data = await main_db.add(self.model, data)
             code = HTTP_SUCCESS if status else HTTP_FAILED
-            
+
             await self.refresh_permissions_cache(status)
 
             return {
@@ -277,12 +277,12 @@ class DynamicApiManager:
                 "msg": "Success to create" if status else "Failed to create",
                 "data": data
             }
-    
+
     def _register_read_one_route(self, prefix: str):
         """注册查询单个记录路由"""
         permission_name = self.config['read_one']['permission_name']
         validate_schema = self.config['read_one'].get('validate_schema', None)
-        
+
         @self.router.get(
             f"{prefix}/{{item_id}}",
             summary=f"Get {self.model_name} by ID",
@@ -291,7 +291,7 @@ class DynamicApiManager:
             response_model=ReponseModel
         )
         @require_auth(
-            module_name=self.module_name, 
+            module_name=self.module_name,
             permission_names=[permission_name]
         )
         async def read_one_handler(request: Request, item_id: int):
@@ -301,14 +301,14 @@ class DynamicApiManager:
                 where_conditions={"id": {"operator": "=", "value": item_id}},
                 return_clear=True
             )
-            
+
             code = HTTP_SUCCESS if result else HTTP_FAILED
             data = None
-            
+
             if result and code == HTTP_SUCCESS:
                 # 应用Schema过滤
                 data = self._apply_schema_filter(result[0], validate_schema)
-                    
+
             return {
                 "code": code,
                 "msg": "Query successful" if code == HTTP_SUCCESS else "Query failed",
@@ -319,7 +319,7 @@ class DynamicApiManager:
         """注册过滤查询路由"""
         permission_name = self.config['read_filter']['permission_name']
         validate_schema = self.config['read_filter'].get('validate_schema', None)
-        
+
         @self.router.post(
             f"{prefix}/filter",
             summary=f"灵活过滤查询 {self.model_name} 记录",
@@ -328,12 +328,12 @@ class DynamicApiManager:
             response_model=ReponseModel
         )
         @require_auth(
-            module_name=self.module_name, 
+            module_name=self.module_name,
             permission_names=[permission_name]
         )
         async def read_filter_handler(request: Request, filter_request: FilterRequest):
             """过滤查询记录"""
-        
+
             # 调用 run_query 方法，固定 return_clear=True
             result = await main_db.run_query(
                 table=self.model,
@@ -345,24 +345,24 @@ class DynamicApiManager:
                 offset=filter_request.offset,
                 return_clear=True
             )
-            
+
             # 应用Schema过滤
             processed_data = self._apply_schema_filter(result, validate_schema)
             data = {
                 "data": processed_data,
                 "total": len(processed_data) if processed_data else 0
             }
-             
+
             return {
                 "code": HTTP_SUCCESS,
                 "msg": "Query successful",
                 "data": data
             }
-    
+
     def _register_update_route(self, prefix: str):
         """注册更新路由"""
         permission_name = self.config['update']['permission_name']
-        
+
         @self.router.put(
             f"{prefix}/{{item_id}}",
             summary=f"Update {self.model_name}",
@@ -371,13 +371,13 @@ class DynamicApiManager:
             response_model=ReponseModel
         )
         @require_auth(
-            module_name=self.module_name, 
+            module_name=self.module_name,
             permission_names=[permission_name]
         )
         async def update_handler(request: Request, item_id: int, data: self.UpdateSchema): # type: ignore
             """更新记录"""
             data = data.dict()
-            
+
             # check if record exists
             result = await main_db.run_query(
                 table=self.model,
@@ -390,7 +390,7 @@ class DynamicApiManager:
                     "msg": f"{self.model_name} with ID {item_id} does not exist",
                     "data": None
                 }
-            
+
             # update date
             filtered_data = {k: v for k, v in data.items() if v is not None}
             if not filtered_data:
@@ -399,7 +399,7 @@ class DynamicApiManager:
                     "msg": "No fields to update",
                     "data": None
                 }
-            
+
             status, data = await main_db.update(
                 self.model,
                 filtered_data,
@@ -415,11 +415,11 @@ class DynamicApiManager:
                 "msg": msg,
                 "data": data
             }
-    
+
     def _register_delete_route(self, prefix: str):
         """注册删除路由"""
         permission_name = self.config['delete']['permission_name']
-        
+
         @self.router.delete(
             f"{prefix}/{{item_id}}",
             summary=f"Delete {self.model_name}",
@@ -428,7 +428,7 @@ class DynamicApiManager:
             response_model=ReponseModel
         )
         @require_auth(
-            module_name=self.module_name, 
+            module_name=self.module_name,
             permission_names=[permission_name]
         )
         async def delete_handler(request: Request, item_id: int):
@@ -445,7 +445,7 @@ class DynamicApiManager:
                     "msg": f"{self.model_name} with ID {item_id} does not exist",
                     "data": None
                 }
-            
+
             status, affected = await main_db.delete(
                 self.model,
                 main_db.build_where_conditions(self.model, {"id": {"operator": "=", "value": item_id}})

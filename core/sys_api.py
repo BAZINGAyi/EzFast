@@ -5,8 +5,8 @@ from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 
 from core.auth import (
-    oauth2_scheme, 
-    create_access_token, 
+    oauth2_scheme,
+    create_access_token,
     require_auth,
     get_current_user_from_request
 )
@@ -18,7 +18,7 @@ from core import (
     get_permissions_names_from_bitmask,
     get_module_name
 )
-    
+
 from core.models.user_models import Permission, User, Role, Module, RoleModulePermission
 from core.config import settings
 
@@ -31,7 +31,7 @@ router = APIRouter()
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     """
     用户登录接口
-    
+
     为 Swagger UI 提供认证功能，返回 JWT token
     """
     user = await main_db.run_query(
@@ -44,7 +44,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-        
+
     user_id = user[0]["id"]
     access_token = create_access_token(data={"user_id": user_id})
     return {
@@ -63,11 +63,11 @@ class CommonUserSchema(BaseModel):
     phone_number: Optional[str] = None
     role_id: int
     locale: Optional[str] = None
-    
+
 class ListUserSchema(CommonUserSchema):
     id: int
     created_at: Optional[datetime] = None
-    
+
 class CreateUserSchema(CommonUserSchema):
     password: str
 
@@ -95,7 +95,7 @@ async def create_user(request: Request, user: CreateUserSchema):
     user_dict = user.model_dump()
     password = user_dict.pop("password")
 
-    
+
     # 生成密码哈希，及创建时间等属性
     user = User(**user_dict)
     user.set_password(password)
@@ -105,13 +105,13 @@ async def create_user(request: Request, user: CreateUserSchema):
     code = HTTP_SUCCESS if status else HTTP_FAILED
     if not status:
         raise HTTPException(status_code=HTTP_FAILED, detail="Failed to create user")
-    
+
     return {
         "code": code,
         "msg": "User created successfully" if status else "Failed to create user",
         "data": data
     }
-    
+
 @user_router.put("/user/{item_id}", dependencies=[Depends(oauth2_scheme)])
 @require_auth(module_name="User", permission_names=["UPDATE"])
 async def update_user(request: Request, item_id: int, user: UpdateUserSchema):
@@ -120,7 +120,7 @@ async def update_user(request: Request, item_id: int, user: UpdateUserSchema):
     is_all_none = all(value is None for value in user_dict.values())
     if is_all_none:
         raise HTTPException(status_code=HTTP_FAILED, detail="No fields to update")
-    
+
     # check user exists
     existing_user = await main_db.run_query(
         User,
@@ -207,10 +207,10 @@ class SetRolePermissionsRequest(BaseModel):
 async def set_role_permissions(request: Request, role_permissions: SetRolePermissionsRequest):
     """
     为角色设置模块权限
-    
+
     Args:
         role_permissions: 角色权限配置
-        
+
     Payload 示例:
     {
         "roles": [
@@ -225,7 +225,7 @@ async def set_role_permissions(request: Request, role_permissions: SetRolePermis
         ]
     }
     """
-    
+
     # 汇总 role_id , 以及 module 和 permission 名称，
     # 通过 get_module_id 和 get_permission_bit 转换为 ID 和位. 如果校验失败，直接报错。
     update_role_ids = []
@@ -242,15 +242,15 @@ async def set_role_permissions(request: Request, role_permissions: SetRolePermis
             if module_id == 0:
                 raise HTTPException(status_code=HTTP_FAILED, detail=f"Invalid module name: {module_perm.module}")
             permission_dict["module_id"] = module_id
-            
+
             for perm_name in module_perm.permissions:
                 perm_bit = get_permission_bit(perm_name)
                 if perm_bit == 0:
                     raise HTTPException(status_code=HTTP_FAILED, detail=f"Invalid permission name: {perm_name}")
                 permission_dict["permissions"] |= perm_bit
             role_module_permissions.append(permission_dict)
-        
-                
+
+
     # check all role_id exist
     roles_in_db = await main_db.run_query(
         Role,
@@ -260,7 +260,7 @@ async def set_role_permissions(request: Request, role_permissions: SetRolePermis
         existing_role_ids = {role["id"] for role in roles_in_db}
         missing_roles = set(update_role_ids) - existing_role_ids
         raise HTTPException(status_code=HTTP_FAILED, detail=f"Roles not found: {missing_roles}")
-    
+
     # 删除已有的角色模块权限关联, 再批量插入新的关联
     dml_data =[
         {
@@ -278,7 +278,7 @@ async def set_role_permissions(request: Request, role_permissions: SetRolePermis
     success, errors, _ = await main_db.bulk_dml_table(dml_data)
     if not success:
         raise HTTPException(status_code=HTTP_FAILED, detail=f"Failed to set role permissions: {errors}")
-    
+
     return {
         "code": HTTP_SUCCESS,
         "data": role_permissions.model_dump()
@@ -288,17 +288,18 @@ async def set_role_permissions(request: Request, role_permissions: SetRolePermis
 @role_router.get("/sys_role/permissions", dependencies=[Depends(oauth2_scheme)])
 @require_auth(module_name="Role", permission_names=["READ"])
 async def get_role_permissions(request: Request):
+    """获取角色权限"""
     # 根据 token 获取当前用户
     current_user = await get_current_user_from_request(request)
     role_id = current_user.get("role_id")
-    
+
     role_module_perms = await main_db.run_query(
         RoleModulePermission,
         where_conditions={"role_id": {"operator": "=", "value": role_id}},
         return_clear=True
     )
 
-    
+
     # 遍历结果，转换 module_id 和 permissions
     role_permissions = []
     for perm in role_module_perms:
@@ -306,7 +307,7 @@ async def get_role_permissions(request: Request):
             module=get_module_name(perm["module_id"]),
             permissions=get_permissions_names_from_bitmask(perm["permissions"])
         )
-        
+
         role_perms = RolePermissionSchema(
             role_id=perm["role_id"],
             module_permissions=[module_perms]
