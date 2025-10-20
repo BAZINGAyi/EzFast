@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Optional, List
 from fastapi import APIRouter, Depends, Request, HTTPException
 from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from core.auth import (
     oauth2_scheme,
@@ -189,18 +189,57 @@ role_router = DynamicApiManager(Role, role_config).get_router()
 # =============== 角色权限设置 API ===============
 
 class ModulePermissionSchema(BaseModel):
-    """模块权限配置Schema"""
-    module: str  # 模块名称
-    permissions: List[str]  # 权限名称列表
+    """模块权限配置 Schema"""
+    module: str = Field(..., description="模块名称，例如 'User' 或 'Permission'")
+    permissions: List[str] = Field(..., description="该模块下的权限名称列表，例如 ['READ', 'WRITE', 'DELETE']")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "module": "User",
+                "permissions": ["READ", "WRITE", "UPDATE", "DELETE"]
+            }
+        }
 
 class RolePermissionSchema(BaseModel):
-    """角色权限配置Schema"""
-    role_id: int
-    module_permissions: List[ModulePermissionSchema]
+    """角色权限配置 Schema"""
+    role_id: int = Field(..., description="角色 ID")
+    module_permissions: List[ModulePermissionSchema] = Field(
+        ..., description="角色拥有的模块权限列表"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "role_id": 2,
+                "module_permissions": [
+                    {"module": "User", "permissions": ["READ", "WRITE", "UPDATE", "DELETE"]},
+                    {"module": "Permission", "permissions": ["READ", "WRITE"]},
+                ]
+            }
+        }
 
 class SetRolePermissionsRequest(BaseModel):
-    """设置角色权限请求Schema"""
-    roles: List[RolePermissionSchema]
+    """设置角色权限请求 Schema"""
+    roles: List[RolePermissionSchema] = Field(
+        ..., description="需要设置权限的角色列表"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "roles": [
+                    {
+                        "role_id": 2,
+                        "module_permissions": [
+                            {"module": "User", "permissions": ["READ", "WRITE", "UPDATE", "DELETE"]},
+                            {"module": "Permission", "permissions": ["READ", "WRITE", "UPDATE", "DELETE"]},
+                            {"module": "Module", "permissions": ["READ", "WRITE", "UPDATE", "DELETE"]},
+                        ],
+                    }
+                ]
+            }
+        }
 
 @role_router.post("/sys_role/permissions", dependencies=[Depends(oauth2_scheme)])
 @require_auth(module_name="Role", permission_names=["WRITE"])
@@ -210,27 +249,23 @@ async def set_role_permissions(request: Request, role_permissions: SetRolePermis
 
     Args:
         role_permissions: 角色权限配置
-
-    Payload 示例:
-    {
-        "roles": [
-            {
-                "role_id": 2,
-                "module_permissions": [
-                    {"module": "User", "permissions": ["READ", "WRITE", "UPDATE", "DELETE"]},
-                    {"module": "Permission", "permissions": ["READ", "WRITE", "UPDATE", "DELETE"]},
-                    {"module": "Module", "permissions": ["READ", "WRITE", "UPDATE", "DELETE"]}
-                ]
-            }
-        ]
-    }
     """
+    # 获取管理员 role_id, 管理员的权限不可更改和删除。
+    role = await main_db.run_query(
+        Role,
+        where_conditions={"name": {"operator": "=", "value": "admin"}},
+        return_clear=True
+    )
+    role_id = role[0]['id']
 
     # 汇总 role_id , 以及 module 和 permission 名称，
     # 通过 get_module_id 和 get_permission_bit 转换为 ID 和位. 如果校验失败，直接报错。
     update_role_ids = []
     role_module_permissions = []
     for role in role_permissions.roles:
+        if role.role_id == role_id:
+            continue
+
         update_role_ids.append(role.role_id)
         for module_perm in role.module_permissions:
             permission_dict = {
@@ -250,8 +285,13 @@ async def set_role_permissions(request: Request, role_permissions: SetRolePermis
                 permission_dict["permissions"] |= perm_bit
             role_module_permissions.append(permission_dict)
 
+    if not update_role_ids:
+        raise HTTPException(
+            status_code=HTTP_FAILED,
+            detail="The admin permissions cannot be modified, or the permissions to be updated are empty.")
 
     # check all role_id exist
+    update_role_ids = list(set(update_role_ids))
     roles_in_db = await main_db.run_query(
         Role,
         where_conditions={"id": {"operator": "IN", "value": update_role_ids}},

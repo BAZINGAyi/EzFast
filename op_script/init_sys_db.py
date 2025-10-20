@@ -6,9 +6,12 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.utils.database.db_manager import DatabaseManager
 from core.config import settings
-from core.constant import Init_Modules, Init_Permissions, Init_Module_Permissions, Init_Role_Module_Permissions, Init_Roles, Init_Users
+from core.constant import (
+    Init_Modules, Init_Permissions, Init_Module_Permissions,
+    Init_Role_Module_Permissions, Init_Roles, Init_Users)
 from core.models.base_models import Base
-from core.models.user_models import Module, Permission, Role, User, ModulePermission, RoleModulePermission
+from core.models.user_models import (
+    Module, Permission, Role, User, ModulePermission, RoleModulePermission)
 
 async def init_db_schema(main_db):
     """

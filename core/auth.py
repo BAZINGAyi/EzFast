@@ -192,7 +192,8 @@ async def get_current_user_from_request(request: Request) -> User:
 
     async with main_db.get_session() as session:
         user = await session.execute(
-            select(User).where(User.id == request.state.current_user_id)).scalar_one_or_none()
+            select(User).where(User.id == request.state.current_user_id))
+        user = user.scalar_one_or_none()
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
         return user.to_dict()
