@@ -4,24 +4,24 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, Request
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
+from sqlalchemy import select
 
 from core import main_db, get_module_id, get_permission_bit
 from core.utils.async_tools import async_wrap
-from core.utils.database.db_manager import DatabaseManager
 from core.config import settings
 
-from core.models.user_models import User, Permission, Module, RoleModulePermission
+from core.models.user_models import User, RoleModulePermission
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/sys/auth/login")
 
 def create_access_token(data: dict, expires_delta: timedelta = None):
     """
     Create JWT access token.
-    
+
     Args:
         data: Data to encode in the token
         expires_delta: Token expiration time override
-    
+
     Returns:
         str: Encoded JWT token
     """
@@ -57,13 +57,13 @@ def verify_token(token: str) -> dict:
 def get_user_id_from_jwt(request: Request) -> int:
     """
     Extract and verify JWT token from request, return user ID.
-    
+
     Args:
         request: FastAPI Request object
-        
+
     Returns:
         int: User ID from token
-        
+
     Raises:
         HTTPException: If token is missing, invalid, or expired
     """
@@ -78,45 +78,46 @@ def get_user_id_from_jwt(request: Request) -> int:
         raise HTTPException(status_code=401, detail="Invalid token payload")
     return user_id
 
-@async_wrap
-def check_permissions(user_id, module_id, permission_bitmask):
+async def check_permissions(user_id, module_id, permission_bitmask):
     """
     Check if the user has the required permissions for the module.
     """
-    with main_db.get_session() as session:
-        # get user permissions
-        permissions = session.query(
-            RoleModulePermission.permissions
-        ).select_from(User).join(
-            RoleModulePermission,
-            User.role_id == RoleModulePermission.role_id
-        ).filter(
-            User.id == user_id,
-            RoleModulePermission.module_id == module_id
-        ).first()
+    try:
+        async with main_db.get_session() as session:
+            stmt = select(RoleModulePermission.permissions).select_from(User).join(
+                RoleModulePermission,
+                User.role_id == RoleModulePermission.role_id
+            ).where(
+                User.id == user_id,
+                RoleModulePermission.module_id == module_id
+            )
+            permissions = await session.execute(stmt)
+            permissions_bit = permissions.scalar_one_or_none()
 
-        permission = RoleModulePermission(permissions=permissions[0]) if permissions else None
-        if not permission or not permission.has_permission(permission_bitmask):
-            return False
-    return True
+            permission = RoleModulePermission(permissions=permissions_bit) if permissions_bit else None
+            if not permission or not permission.has_permission(permission_bitmask):
+                return False
+        return True
+    except Exception:
+        return False
 
 def require_auth(module_name: str = None, permission_names: list = None):
     """
     Unified authentication and permission check decorator.
-    
+
     Args:
         module_name: Module name for permission check, None for auth only
         permission_names: List of permission names for permission check, None for auth only
-    
+
     Usage:
         @require_auth()  # Authentication only
         @require_auth(module_name="User", permission_names=["READ", "WRITE"])  # Auth + permission check
-        
+
     Example:
         @require_auth()
         async def simple_api():
             return {"data": "protected"}
-            
+
         @require_auth(module_name="User", permission_names=["READ", "WRITE"])
         async def get_users(request: Request):
             user_id = request.state.current_user_id
@@ -149,7 +150,7 @@ def require_auth(module_name: str = None, permission_names: list = None):
                         status_code=500,
                         detail=f"Module '{module_name}' not found"
                     )
-                
+
                 # Resolve permission_names to permission_bitmask at runtime
                 permission_bitmask = 0
                 for perm_name in permission_names:
@@ -160,12 +161,12 @@ def require_auth(module_name: str = None, permission_names: list = None):
                             detail=f"Permission '{perm_name}' not found"
                         )
                     permission_bitmask |= perm_bit
-                
+
                 # Perform permission check
                 has_perm = await check_permissions(user_id, module_id, permission_bitmask)
                 if not has_perm:
                     raise HTTPException(
-                        status_code=403, 
+                        status_code=403,
                         detail="Forbidden: insufficient permissions"
                     )
 
@@ -173,25 +174,25 @@ def require_auth(module_name: str = None, permission_names: list = None):
         return wrapper
     return decorator
 
-@async_wrap
-def get_current_user_from_request(request: Request) -> User:
+async def get_current_user_from_request(request: Request) -> User:
     """
     Get current user object from request state (requires database query).
-    
+
     Args:
         request: FastAPI Request object with current_user_id in state
-        
+
     Returns:
         User: Current user object
-        
+
     Raises:
         HTTPException: If authentication required or user not found
     """
     if not hasattr(request.state, 'current_user_id'):
         raise HTTPException(status_code=401, detail="Authentication required")
-    
-    with main_db.get_session() as session:
-        user = session.query(User).filter(User.id == request.state.current_user_id).first()
+
+    async with main_db.get_session() as session:
+        user = await session.execute(
+            select(User).where(User.id == request.state.current_user_id)).scalar_one_or_none()
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
         return user.to_dict()

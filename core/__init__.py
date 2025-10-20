@@ -17,7 +17,8 @@ from core.utils.log_manager import LogManager
 """
 load db service for global access
 """
-main_db = DatabaseManager(settings.DB_CONFIG).get_database("default")
+manager = DatabaseManager(settings.DB_CONFIG)
+main_db = manager.get_database("default")
 __PermissionsConstant = {}
 __ModulesConstant = {}
 def get_module_id(module_name: str) -> int:
@@ -76,7 +77,7 @@ async def load_permissions():
 #     admin_user.set_password("admin")
 #     user_dict = admin_user.to_dict()
 #     user_dict["password_hash"] = admin_user.password
-    
+
 #     insert_data = [
 #         {
 #             "table": User.__table__,
@@ -102,12 +103,13 @@ async def lifespan(app):
     # 应用启动逻辑
     await load_permissions()
     print("🚀 应用启动完成！")
-    
+
     yield
-    
+
     # 应用关闭逻辑
     print("🛑 应用关闭完成！")
-    
+    await manager.close_all()
+
 
 async def pydantic_validation_exception_handler(request, exc: ValidationError):
     """
@@ -116,7 +118,7 @@ async def pydantic_validation_exception_handler(request, exc: ValidationError):
     """
     tb_str = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
     sys_logger.error(f"Validation exception traceback: {tb_str}")
-    
+
     return JSONResponse(
         status_code=500,
         content={
@@ -124,8 +126,8 @@ async def pydantic_validation_exception_handler(request, exc: ValidationError):
             "msg": "数据验证时发生错误，请联系管理员，查看日志获取详细信息"
         },
     )
-    
-    
+
+
 async def http_exception_handler(request: Request, exc: HTTPException):
     """
     HTTP异常处理器
