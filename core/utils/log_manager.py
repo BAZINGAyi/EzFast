@@ -1,5 +1,11 @@
 from loguru import logger
 import os
+from functools import partial
+
+# 模块级函数，可以被 pickle
+def _logger_name_filter(record, target_name):
+    """过滤器函数：只接收指定 logger_name 的日志"""
+    return record["extra"].get("logger_name") == target_name
 
 class LogManager:
     def __init__(self, config: dict, log_dir: str = "logs", enqueue: bool = False):
@@ -35,8 +41,8 @@ class LogManager:
     def load_config(self, config: dict):
         # if Windows and using queue in multiprocessing
         if os.name == 'nt' and self.enqueue:
-            logger.remove() # "sys.stderr" sink is not picklable 
-        
+            logger.remove() # "sys.stderr" sink is not picklable
+
         loggers_config = config.get("loggers", [])
         for lg_conf in loggers_config:
             file_name = lg_conf.get("file")
@@ -54,11 +60,26 @@ class LogManager:
             )
 
     def add_logger(self, name: str, file: str, level: str = "INFO", rotate=None):
+        # 使用 functools.partial 创建可 pickle 的过滤器
+        logger_filter = partial(_logger_name_filter, target_name=name)
+
         if file:
             os.makedirs(os.path.dirname(file), exist_ok=True)
-            handler_id = logger.add(file, level=level, rotation=rotate, enqueue=True, backtrace=True, diagnose=True)
+            handler_id = logger.add(
+                file,
+                level=level,
+                rotation=rotate,
+                enqueue=self.enqueue,
+                backtrace=True,
+                diagnose=True,
+                filter=logger_filter  # 添加过滤器
+            )
         else:
-            handler_id = logger.add(lambda msg: print(msg, end=''), level=level)
+            handler_id = logger.add(
+                lambda msg: print(msg, end=''),
+                level=level,
+                filter=logger_filter  # 添加过滤器
+            )
         self.loggers[name] = handler_id
 
     def get_logger(self, name: str):
