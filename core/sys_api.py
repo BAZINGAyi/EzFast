@@ -3,6 +3,7 @@ from typing import Optional, List
 from fastapi import APIRouter, Depends, Request, HTTPException
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
 from core.auth import (
     oauth2_scheme,
@@ -121,41 +122,33 @@ async def create_user(request: Request, user: CreateUserSchema):
 @require_auth(module_name="User", permission_names=["UPDATE"])
 async def update_user(request: Request, item_id: int, user: UpdateUserSchema):
     """更新用户 - 处理密码哈希"""
-    user_dict = user.model_dump()
+    user_dict = user.model_dump(exclude_none=True)
     is_all_none = all(value is None for value in user_dict.values())
     if is_all_none:
         raise HTTPException(status_code=HTTP_FAILED, detail="No fields to update")
 
-    # check user exists
-    existing_user = await main_db.run_query(
-        User,
-        where_conditions={"id": {"operator": "=", "value": item_id}},
-        return_clear=True)
-    if not existing_user:
-        raise HTTPException(
-            status_code=HTTP_FAILED,
-            detail="User not found",
-        )
+    data = None
+    async with main_db.get_session() as session:
+        existing_user = await session.execute(select(User).where(User.id == item_id))
+        existing_user = existing_user.scalars().first()
+        if not existing_user:
+            raise HTTPException(
+                status_code=HTTP_FAILED,
+                detail="User not found",
+            )
 
-    # 生成密码哈希，及创建时间等属性
-    user = User(**user_dict)
-    password = user_dict.pop("password", None)
-    if password:
-        user.set_password(password)
-    user_dict = user.to_dict()
-    user_dict["password_hash"] = user.password_hash
-    filtered_data = {k: v for k, v in user_dict.items() if v is not None}
-    status, data = await main_db.update(
-        User,
-        filtered_data,
-        main_db.build_where_conditions(User, {"id": {"operator": "=", "value": item_id}}))
-    code = HTTP_SUCCESS if status else HTTP_FAILED
-    if not status:
-        raise HTTPException(status_code=HTTP_FAILED, detail=data)
+        for key, value in user_dict.items():
+            setattr(existing_user, key, value)
+
+        await session.commit()
+        await session.flush()
+        await session.refresh(existing_user)
+
+        data = existing_user.to_dict()
 
     return {
-        "code": code,
-        "msg": "User updated successfully" if status else "Failed to update user",
+        "code": HTTP_SUCCESS,
+        "msg": "User updated successfully",
         "data": data
     }
 
