@@ -182,6 +182,7 @@ role_config = {
     'create': {'permission_name': "WRITE"},
     'update': {'permission_name': "UPDATE"},
     'delete': {'permission_name': "DELETE"},
+    'read_filter': {'permission_name': 'READ'},
 }
 role_router = DynamicApiManager(Role, role_config).get_router()
 
