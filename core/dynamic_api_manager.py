@@ -147,7 +147,7 @@ class DynamicApiManager:
         self.module_name = config.get('module_name', self.model_name)
 
         # 生成 Pydantic 模型
-        self._generate_schemas()
+        self._generate_schemas(config.get('ignore_fields', None))
 
         # 注册路由
         self._register_routes()
@@ -185,7 +185,7 @@ class DynamicApiManager:
         return data
 
 
-    def _generate_schemas(self):
+    def _generate_schemas(self, ignore_dict: Optional[Dict[str, Any]] = None):
         """生成 Pydantic 模型用于请求和响应"""
         # 获取 SQLAlchemy 模型的字段信息
         mapper = inspect(self.model)
@@ -203,7 +203,10 @@ class DynamicApiManager:
                 python_type = Optional[python_type]
 
             # 响应模型包含所有字段
-            response_fields[column_name] = (python_type, ...)
+            if ignore_dict and "response" in ignore_dict and column_name in ignore_dict["response"]:
+                pass
+            else:
+                response_fields[column_name] = (python_type, ...)
 
             # 创建和更新模型排除自动生成的字段
             if column_name not in ['id', 'created_at', 'updated_at']:

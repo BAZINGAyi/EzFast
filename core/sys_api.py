@@ -67,6 +67,10 @@ class CommonUserSchema(BaseModel):
 class ListUserSchema(CommonUserSchema):
     id: int
     created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    is_active: bool = None
+    description: Optional[str] = None
+    last_login_time: Optional[datetime] = None
 
 class CreateUserSchema(CommonUserSchema):
     password: str
@@ -84,6 +88,7 @@ user_config = {
     'read_one': {'permission_name': "READ", "validate_schema": ListUserSchema},
     'read_filter': {'permission_name': 'READ', "validate_schema": ListUserSchema},
     'delete': {'permission_name': "DELETE"},
+    "ignore_fields": {"response": ["password_hash"]},
 }
 user_router = DynamicApiManager(User, user_config).get_router()
 
