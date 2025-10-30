@@ -228,6 +228,28 @@ class DynamicApiManager:
             **response_fields
         )
 
+        # 创建完整的响应模型，其中 data 字段类型为 ResponseSchema
+        self.FullResponseSchema = create_model(
+            f"{self.model_name}FullResponse",
+            code=(int, ...),
+            msg=(str, ...),
+            data=(Optional[self.ResponseSchema], None)
+        )
+
+        # 创建列表数据响应模型（用于 filter 查询）
+        ListDataSchema = create_model(
+            f"{self.model_name}ListData",
+            data=(List[self.ResponseSchema], ...),
+            total=(int, ...)
+        )
+
+        self.ListResponseSchema = create_model(
+            f"{self.model_name}ListResponse",
+            code=(int, ...),
+            msg=(str, ...),
+            data=(Optional[ListDataSchema], None)
+        )
+
     def _register_routes(self):
         """注册所有 CRUD 路由"""
         prefix = f"/{self.table_name}"
@@ -257,7 +279,7 @@ class DynamicApiManager:
             summary=f"Create {self.model_name}",
             description=f"Create a new {self.model_name} record",
             dependencies=[Depends(oauth2_scheme)],
-            response_model=ReponseModel
+            response_model=self.FullResponseSchema
         )
         @require_auth(
             module_name=self.module_name,
@@ -288,7 +310,7 @@ class DynamicApiManager:
             summary=f"Get {self.model_name} by ID",
             description=f"Retrieve a specific {self.model_name} record by ID",
             dependencies=[Depends(oauth2_scheme)],
-            response_model=ReponseModel
+            response_model=self.FullResponseSchema
         )
         @require_auth(
             module_name=self.module_name,
@@ -325,7 +347,7 @@ class DynamicApiManager:
             summary=f"灵活过滤查询 {self.model_name} 记录",
             description=f"""对 {self.model_name} 表进行灵活的过滤查询。""",
             dependencies=[Depends(oauth2_scheme)],
-            response_model=ReponseModel
+            response_model=self.ListResponseSchema
         )
         @require_auth(
             module_name=self.module_name,
@@ -368,7 +390,7 @@ class DynamicApiManager:
             summary=f"Update {self.model_name}",
             description=f"Update a specific {self.model_name} record",
             dependencies=[Depends(oauth2_scheme)],
-            response_model=ReponseModel
+            response_model=self.FullResponseSchema
         )
         @require_auth(
             module_name=self.module_name,
@@ -425,7 +447,7 @@ class DynamicApiManager:
             summary=f"Delete {self.model_name}",
             description=f"Delete a specific {self.model_name} record",
             dependencies=[Depends(oauth2_scheme)],
-            response_model=ReponseModel
+            response_model=self.FullResponseSchema
         )
         @require_auth(
             module_name=self.module_name,
@@ -446,6 +468,7 @@ class DynamicApiManager:
                     "data": None
                 }
 
+            temp_data = result[0]
             status, affected = await main_db.delete(
                 self.model,
                 main_db.build_where_conditions(self.model, {"id": {"operator": "=", "value": item_id}})
@@ -456,17 +479,17 @@ class DynamicApiManager:
             return {
                 "code": HTTP_SUCCESS if status else HTTP_FAILED,
                 "msg": "Delete successful" if status else "Delete failed",
-                "data": {"id": item_id}
+                "data": temp_data
             }
 
     def get_router(self) -> APIRouter:
         """获取生成的路由器"""
         return self.router
 
-    async def refresh_permissions_cache(self, code):
+    async def refresh_permissions_cache(self, status: bool):
         """刷新权限缓存"""
         # 如果 module_name 是 Permission 或者 Module，对应 update/create/delete 操作需要刷新权限缓存
-        if code == HTTP_SUCCESS and self.module_name in ['Permission', 'Module']:
+        if status and self.module_name in ['Permission', 'Module']:
             await load_permissions()
 
 
