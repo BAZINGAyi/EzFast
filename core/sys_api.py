@@ -1,8 +1,5 @@
-from datetime import datetime
-from typing import Optional, List
 from fastapi import APIRouter, Depends, Request, HTTPException
 from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from core.auth import (
@@ -25,6 +22,16 @@ from core.config import settings
 from core.models.user_models import User
 from core.dynamic_api_manager import HTTP_FAILED, HTTP_SUCCESS, DynamicApiManager
 from core.models.user_models import Module
+
+from core.schemas.user_schema import (
+    ListUserSchema,
+    CreateUserSchema,
+    UpdateUserSchema,
+    RolePermissionsResponse,
+    RolePermissionSchema,
+    ModulePermissionSchema,
+    SetRolePermissionsRequest
+)
 
 # 创建系统 API 路由器
 router = APIRouter()
@@ -57,32 +64,43 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
         "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60 * 10
     }
 
-# User API
-class CommonUserSchema(BaseModel):
-    username: str
-    email: str
-    phone_number: Optional[str] = None
-    role_id: int
-    locale: Optional[str] = None
+# 事先创建，避免路由冲突问题
+user_router = APIRouter()
 
-class ListUserSchema(CommonUserSchema):
-    id: int
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-    is_active: bool = None
-    description: Optional[str] = None
-    last_login_time: Optional[datetime] = None
+@user_router.get("/sys_user/permissions", dependencies=[Depends(oauth2_scheme)], response_model=RolePermissionsResponse)
+@require_auth(module_name="User", permission_names=["READ"])
+async def get_user_permissions(request: Request):
+    """获取当前用户权限"""
+    # 根据 token 获取当前用户
+    current_user = await get_current_user_from_request(request)
+    role_id = current_user.get("role_id")
 
-class CreateUserSchema(CommonUserSchema):
-    password: str
+    role_module_perms = await main_db.run_query(
+        RoleModulePermission,
+        where_conditions={"role_id": {"operator": "=", "value": role_id}},
+        return_clear=True
+    )
 
-class UpdateUserSchema(BaseModel):
-    password: Optional[str] = None
-    email: Optional[str] = None
-    phone_number: Optional[str] = None
-    role_id: Optional[int] = None
-    locale: Optional[str] = None
-    username: Optional[str] = None
+    # 遍历结果，转换 module_id 和 permissions
+    module_permissions = []
+    for perm in role_module_perms:
+        module_perms = ModulePermissionSchema(
+            module=get_module_name(perm["module_id"]),
+            permissions=get_permissions_names_from_bitmask(perm["permissions"])
+        )
+
+        module_permissions.append(module_perms)
+
+    role_perms = RolePermissionSchema(
+        role_id=role_id,
+        module_permissions=module_permissions
+    )
+
+    return RolePermissionsResponse(
+        code=HTTP_SUCCESS,
+        msg="Success",
+        data=[role_perms]
+    )
 
 user_config = {
     'module_name': "User",
@@ -91,7 +109,7 @@ user_config = {
     'delete': {'permission_name': "DELETE"},
     "ignore_fields": {"response": ["password_hash"]},
 }
-user_router = DynamicApiManager(User, user_config).get_router()
+user_router = DynamicApiManager(User, user_config, user_router).get_router()
 
 # 对于创建和修改用户操作，单独定义 api 以处理密码哈希
 @user_router.post("/sys_user", dependencies=[Depends(oauth2_scheme)])
@@ -186,64 +204,6 @@ role_router = DynamicApiManager(Role, role_config).get_router()
 
 # =============== 角色权限设置 API ===============
 
-class ModulePermissionSchema(BaseModel):
-    """模块权限配置 Schema"""
-    module: str = Field(..., description="模块名称，例如 'User' 或 'Permission'")
-    permissions: List[str] = Field(..., description="该模块下的权限名称列表，例如 ['READ', 'WRITE', 'DELETE']")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "module": "User",
-                "permissions": ["READ", "WRITE", "UPDATE", "DELETE"]
-            }
-        }
-
-class RolePermissionSchema(BaseModel):
-    """角色权限配置 Schema"""
-    role_id: int = Field(..., description="角色 ID")
-    module_permissions: List[ModulePermissionSchema] = Field(
-        ..., description="角色拥有的模块权限列表"
-    )
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "role_id": 2,
-                "module_permissions": [
-                    {"module": "User", "permissions": ["READ", "WRITE", "UPDATE", "DELETE"]},
-                    {"module": "Permission", "permissions": ["READ", "WRITE"]},
-                ]
-            }
-        }
-
-class SetRolePermissionsRequest(BaseModel):
-    """设置角色权限请求 Schema"""
-    roles: List[RolePermissionSchema] = Field(
-        ..., description="需要设置权限的角色列表"
-    )
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "roles": [
-                    {
-                        "role_id": 2,
-                        "module_permissions": [
-                            {"module": "User", "permissions": ["READ", "WRITE", "UPDATE", "DELETE"]},
-                            {"module": "Permission", "permissions": ["READ", "WRITE", "UPDATE", "DELETE"]},
-                            {"module": "Module", "permissions": ["READ", "WRITE", "UPDATE", "DELETE"]},
-                        ],
-                    }
-                ]
-            }
-        }
-
-class RolePermissionsResponse(BaseModel):
-    code: int = Field(..., description="状态码")
-    msg: str = Field(..., description="消息")
-    data: Optional[List[RolePermissionSchema]] = Field(None, description="角色权限配置")
-
 @role_router.post("/sys_role/permissions", dependencies=[Depends(oauth2_scheme)], response_model=RolePermissionsResponse)
 @require_auth(module_name="Role", permission_names=["WRITE"])
 async def set_role_permissions(request: Request, role_permissions: SetRolePermissionsRequest):
@@ -326,42 +286,6 @@ async def set_role_permissions(request: Request, role_permissions: SetRolePermis
         "code": HTTP_SUCCESS,
         "data": role_permissions.model_dump()
     }
-
-
-@user_router.get("/sys_user/permissions", dependencies=[Depends(oauth2_scheme)], response_model=RolePermissionsResponse)
-@require_auth(module_name="User", permission_names=["READ"])
-async def get_user_permissions(request: Request):
-    """获取当前用户权限"""
-    # 根据 token 获取当前用户
-    current_user = await get_current_user_from_request(request)
-    role_id = current_user.get("role_id")
-
-    role_module_perms = await main_db.run_query(
-        RoleModulePermission,
-        where_conditions={"role_id": {"operator": "=", "value": role_id}},
-        return_clear=True
-    )
-
-    # 遍历结果，转换 module_id 和 permissions
-    module_permissions = []
-    for perm in role_module_perms:
-        module_perms = ModulePermissionSchema(
-            module=get_module_name(perm["module_id"]),
-            permissions=get_permissions_names_from_bitmask(perm["permissions"])
-        )
-
-        module_permissions.append(module_perms)
-
-    role_perms = RolePermissionSchema(
-        role_id=role_id,
-        module_permissions=module_permissions
-    )
-
-    return RolePermissionsResponse(
-        code=HTTP_SUCCESS,
-        msg="Success",
-        data=[role_perms]
-    )
 
 
 @role_router.get("/sys_role/{role_id}/permissions", dependencies=[Depends(oauth2_scheme)], response_model=RolePermissionsResponse)

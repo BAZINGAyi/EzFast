@@ -129,7 +129,7 @@ class DynamicApiManager:
     根据 SQLAlchemy 模型和配置自动生成 CRUD API
     """
 
-    def __init__(self, model: Type[DeclarativeBase], config: Dict[str, Any]):
+    def __init__(self, model: Type[DeclarativeBase], config: Dict[str, Any], router: APIRouter = None):
         """
         初始化动态 API 管理器
 
@@ -139,7 +139,7 @@ class DynamicApiManager:
         """
         self.model = model
         self.config = config
-        self.router = APIRouter()
+        self.router = router if router else APIRouter()
 
         # 获取模型信息
         self.table_name = model.__tablename__
