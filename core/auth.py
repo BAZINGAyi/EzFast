@@ -4,13 +4,13 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, Request
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
-from sqlalchemy import select
+from sqlalchemy import select, true
 
 from core import main_db, get_module_id, get_permission_bit
 from core.utils.async_tools import async_wrap
 from core.config import settings
 
-from core.models.user_models import User, RoleModulePermission
+from core.models.user_models import User, RoleModulePermission, Role
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/sys/auth/login")
 
@@ -54,7 +54,7 @@ def verify_token(token: str) -> dict:
     except JWTError:
         raise HTTPException(status_code=401, detail="Token is invalid or expired")
 
-def get_user_id_from_jwt(request: Request) -> int:
+def get_user_info_from_jwt(request: Request) -> dict:
     """
     Extract and verify JWT token from request, return user ID.
 
@@ -62,7 +62,7 @@ def get_user_id_from_jwt(request: Request) -> int:
         request: FastAPI Request object
 
     Returns:
-        int: User ID from token
+        dict: User info from token
 
     Raises:
         HTTPException: If token is missing, invalid, or expired
@@ -76,20 +76,24 @@ def get_user_id_from_jwt(request: Request) -> int:
     user_id: int = payload.get("user_id")
     if user_id is None:
         raise HTTPException(status_code=401, detail="Invalid token payload")
-    return user_id
+    role_id: int = payload.get("role_id")
+    if role_id is None:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+    return payload
 
-async def check_permissions(user_id, module_id, permission_bitmask):
+async def check_permissions(role_id, module_id, permission_bitmask):
     """
     Check if the user has the required permissions for the module.
     """
     try:
         async with main_db.get_session() as session:
-            stmt = select(RoleModulePermission.permissions).select_from(User).join(
+            stmt = select(RoleModulePermission.permissions).select_from(Role).join(
                 RoleModulePermission,
-                User.role_id == RoleModulePermission.role_id
+                Role.id == RoleModulePermission.role_id
             ).where(
-                User.id == user_id,
-                RoleModulePermission.module_id == module_id
+                Role.id == role_id,
+                RoleModulePermission.module_id == module_id,
+                Role.is_active.is_(true())
             )
             permissions = await session.execute(stmt)
             permissions_bit = permissions.scalar_one_or_none()
@@ -138,8 +142,9 @@ def require_auth(module_name: str = None, permission_names: list = None):
                 raise RuntimeError("Request object is required in route parameters")
 
             # 1. Verify JWT and get user ID
-            user_id = get_user_id_from_jwt(request)
-            request.state.current_user_id = user_id
+            user_info = get_user_info_from_jwt(request)
+            role_id = user_info.get("role_id")
+            request.state.current_user_id = user_info.get("user_id")
 
             # 2. Check permissions if required
             if module_name and permission_names:
@@ -163,7 +168,7 @@ def require_auth(module_name: str = None, permission_names: list = None):
                     permission_bitmask |= perm_bit
 
                 # Perform permission check
-                has_perm = await check_permissions(user_id, module_id, permission_bitmask)
+                has_perm = await check_permissions(role_id, module_id, permission_bitmask)
                 if not has_perm:
                     raise HTTPException(
                         status_code=403,

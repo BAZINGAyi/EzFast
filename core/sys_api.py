@@ -67,7 +67,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     user_id = user[0]["id"]
     expires_in = settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60 * 10
     access_token = create_access_token(
-        data={"user_id": user_id}, expires_delta=timedelta(seconds=expires_in))
+        data={"user_id": user_id, "role_id": user[0]["role_id"]}, expires_delta=timedelta(seconds=expires_in))
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -336,10 +336,11 @@ async def set_role_permissions(request: Request, role_permissions: SetRolePermis
     if not success:
         raise HTTPException(status_code=HTTP_FAILED, detail=f"Failed to set role permissions: {errors}")
 
-    return {
-        "code": HTTP_SUCCESS,
-        "data": role_permissions.model_dump()
-    }
+    return RolePermissionsResponse(
+        code=HTTP_SUCCESS,
+        msg="Success",
+        data=role_permissions.roles
+    )
 
 
 @role_router.get("/sys_role/{role_id}/permissions", dependencies=[Depends(oauth2_scheme)], response_model=RoleModulePermissionsResponse)

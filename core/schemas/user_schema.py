@@ -37,6 +37,7 @@ class UpdateUserSchema(BaseModel):
     role_id: Optional[int] = None
     locale: Optional[str] = None
     username: Optional[str] = None
+    is_active: Optional[bool] = None
 
 # role schema
 
