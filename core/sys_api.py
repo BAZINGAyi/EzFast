@@ -32,10 +32,13 @@ from core.schemas.user_schema import (
     RoleModulePermissionsResponse,
     RoleModulePermissionsSchema,
     ParentModulePermissionSchema,
-    SubModulePermissionSchema
+    SubModulePermissionSchema,
+    ModulePermissionsTemplateSchema,
+    ModulePermissionsTemplateResponse
 )
 
 from datetime import timedelta, datetime
+import asyncio
 
 # 创建系统 API 路由器
 router = APIRouter()
@@ -154,6 +157,71 @@ async def get_user_permissions(request: Request):
         code=HTTP_SUCCESS,
         msg="Success",
         data=role_module_perms_schema
+    )
+
+@user_router.get("/sys_user/permissions/template", dependencies=[Depends(oauth2_scheme)], response_model=ModulePermissionsTemplateResponse)
+@require_auth(module_name="Role", permission_names=["READ"])
+async def get_role_module_permissions_template(request: Request):
+    """
+    获取角色模块权限模板
+
+    返回所有模块及其所有可用权限的完整模板，用于权限配置参考。
+    每个子模块默认包含所有系统权限。
+    """
+
+    tasks = [
+        main_db.run_query(Permission, return_clear=True),
+        main_db.run_query(Module, return_clear=True)
+    ]
+
+    all_permissions, all_modules = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # 1. 查询所有权限
+    all_permission_names = [perm["name"] for perm in all_permissions]
+
+    # 2. 查询所有模块信息（包含父子关系）
+    # 3. 找出所有父模块（parent_id 为 None 的模块）
+    parent_modules = [m for m in all_modules if m.get("parent_id") is None]
+
+    # 4. 构建层级结构
+    parent_module_permissions = []
+    for parent in parent_modules:
+        parent_id = parent["id"]
+
+        # 查找该父模块下的所有子模块
+        child_modules = [m for m in all_modules if m.get("parent_id") == parent_id]
+
+        # 只处理有子模块的父模块
+        if not child_modules:
+            continue
+
+        # 构建子模块权限列表（每个子模块都分配所有权限）
+        sub_modules = []
+        for child in child_modules:
+            sub_module = SubModulePermissionSchema(
+                module=child["name"],
+                description=child.get("description"),
+                permissions=all_permission_names  # 所有权限
+            )
+            sub_modules.append(sub_module)
+
+        # 添加父模块
+        parent_module = ParentModulePermissionSchema(
+            module=parent["name"],
+            description=parent.get("description"),
+            sub_modules=sub_modules
+        )
+        parent_module_permissions.append(parent_module)
+
+    # 5. 构建响应
+    template_schema = ModulePermissionsTemplateSchema(
+        module_permissions=parent_module_permissions
+    )
+
+    return ModulePermissionsTemplateResponse(
+        code=HTTP_SUCCESS,
+        msg="Success",
+        data=template_schema
     )
 
 user_config = {

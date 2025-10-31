@@ -170,3 +170,34 @@ class RoleModulePermissionsSchema(BaseModel):
 class RoleModulePermissionsResponse(CommonResponseSchema):
     """角色模块权限响应 Schema（层级结构）"""
     data: Optional[RoleModulePermissionsSchema] = Field(None, description="角色模块权限配置（层级结构）")
+
+
+class ModulePermissionsTemplateSchema(BaseModel):
+    """模块权限模板 Schema（层级结构，不包含 role_id）"""
+    module_permissions: List[ParentModulePermissionSchema] = Field(
+        ..., description="父模块及其子模块权限列表"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "module_permissions": [
+                    {
+                        "module": "System Management",
+                        "description": "系统管理",
+                        "sub_modules": [
+                            {
+                                "module": "user",
+                                "description": "用户管理",
+                                "permissions": ["READ", "WRITE", "UPDATE", "DELETE"]
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+
+
+class ModulePermissionsTemplateResponse(CommonResponseSchema):
+    """模块权限模板响应 Schema（层级结构）"""
+    data: Optional[ModulePermissionsTemplateSchema] = Field(None, description="模块权限模板（层级结构）")
