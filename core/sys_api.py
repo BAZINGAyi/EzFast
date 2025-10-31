@@ -54,7 +54,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     return {
         "access_token": access_token,
         "token_type": "bearer",
-        "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60 * 2
+        "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60 * 10
     }
 
 # User API
@@ -94,7 +94,7 @@ user_config = {
 user_router = DynamicApiManager(User, user_config).get_router()
 
 # 对于创建和修改用户操作，单独定义 api 以处理密码哈希
-@user_router.post("/user", dependencies=[Depends(oauth2_scheme)])
+@user_router.post("/sys_user", dependencies=[Depends(oauth2_scheme)])
 @require_auth(module_name="User", permission_names=["WRITE"])
 async def create_user(request: Request, user: CreateUserSchema):
     """创建用户 - 处理密码哈希"""
@@ -118,7 +118,7 @@ async def create_user(request: Request, user: CreateUserSchema):
         "data": data
     }
 
-@user_router.put("/user/{item_id}", dependencies=[Depends(oauth2_scheme)])
+@user_router.put("/sys_user/{item_id}", dependencies=[Depends(oauth2_scheme)])
 @require_auth(module_name="User", permission_names=["UPDATE"])
 async def update_user(request: Request, item_id: int, user: UpdateUserSchema):
     """更新用户 - 处理密码哈希"""
@@ -239,7 +239,12 @@ class SetRolePermissionsRequest(BaseModel):
             }
         }
 
-@role_router.post("/sys_role/permissions", dependencies=[Depends(oauth2_scheme)])
+class RolePermissionsResponse(BaseModel):
+    code: int = Field(..., description="状态码")
+    msg: str = Field(..., description="消息")
+    data: Optional[List[RolePermissionSchema]] = Field(None, description="角色权限配置")
+
+@role_router.post("/sys_role/permissions", dependencies=[Depends(oauth2_scheme)], response_model=RolePermissionsResponse)
 @require_auth(module_name="Role", permission_names=["WRITE"])
 async def set_role_permissions(request: Request, role_permissions: SetRolePermissionsRequest):
     """
@@ -323,10 +328,10 @@ async def set_role_permissions(request: Request, role_permissions: SetRolePermis
     }
 
 
-@role_router.get("/sys_role/permissions", dependencies=[Depends(oauth2_scheme)])
-@require_auth(module_name="Role", permission_names=["READ"])
-async def get_role_permissions(request: Request):
-    """获取角色权限"""
+@user_router.get("/sys_user/permissions", dependencies=[Depends(oauth2_scheme)], response_model=RolePermissionsResponse)
+@require_auth(module_name="User", permission_names=["READ"])
+async def get_user_permissions(request: Request):
+    """获取当前用户权限"""
     # 根据 token 获取当前用户
     current_user = await get_current_user_from_request(request)
     role_id = current_user.get("role_id")
@@ -337,22 +342,56 @@ async def get_role_permissions(request: Request):
         return_clear=True
     )
 
-
     # 遍历结果，转换 module_id 和 permissions
-    role_permissions = []
+    module_permissions = []
     for perm in role_module_perms:
         module_perms = ModulePermissionSchema(
             module=get_module_name(perm["module_id"]),
             permissions=get_permissions_names_from_bitmask(perm["permissions"])
         )
 
-        role_perms = RolePermissionSchema(
-            role_id=perm["role_id"],
-            module_permissions=[module_perms]
-        )
-        role_permissions.append(role_perms.model_dump())
+        module_permissions.append(module_perms)
 
-    return {
-        "code": HTTP_SUCCESS,
-        "data": role_permissions
-    }
+    role_perms = RolePermissionSchema(
+        role_id=role_id,
+        module_permissions=module_permissions
+    )
+
+    return RolePermissionsResponse(
+        code=HTTP_SUCCESS,
+        msg="Success",
+        data=[role_perms]
+    )
+
+
+@role_router.get("/sys_role/{role_id}/permissions", dependencies=[Depends(oauth2_scheme)], response_model=RolePermissionsResponse)
+@require_auth(module_name="Role", permission_names=["READ"])
+async def get_role_permissions(request: Request, role_id: int):
+    """获取当前用户权限"""
+
+    role_module_perms = await main_db.run_query(
+        RoleModulePermission,
+        where_conditions={"role_id": {"operator": "=", "value": role_id}},
+        return_clear=True
+    )
+
+    # 遍历结果，转换 module_id 和 permissions
+    module_permissions = []
+    for perm in role_module_perms:
+        module_perms = ModulePermissionSchema(
+            module=get_module_name(perm["module_id"]),
+            permissions=get_permissions_names_from_bitmask(perm["permissions"])
+        )
+
+        module_permissions.append(module_perms)
+
+    role_perms = RolePermissionSchema(
+        role_id=role_id,
+        module_permissions=module_permissions
+    )
+
+    return RolePermissionsResponse(
+        code=HTTP_SUCCESS,
+        msg="Success",
+        data=[role_perms]
+    )
