@@ -19,9 +19,7 @@ from core import (
 
 from core.models.user_models import Permission, User, Role, Module, RoleModulePermission
 from core.config import settings
-from core.models.user_models import User
 from core.dynamic_api_manager import HTTP_FAILED, HTTP_SUCCESS, DynamicApiManager
-from core.models.user_models import Module
 
 from core.schemas.user_schema import (
     ListUserSchema,
@@ -30,8 +28,14 @@ from core.schemas.user_schema import (
     RolePermissionsResponse,
     RolePermissionSchema,
     ModulePermissionSchema,
-    SetRolePermissionsRequest
+    SetRolePermissionsRequest,
+    RoleModulePermissionsResponse,
+    RoleModulePermissionsSchema,
+    ParentModulePermissionSchema,
+    SubModulePermissionSchema
 )
+
+from datetime import timedelta
 
 # 创建系统 API 路由器
 router = APIRouter()
@@ -57,49 +61,95 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
         )
 
     user_id = user[0]["id"]
-    access_token = create_access_token(data={"user_id": user_id})
+    expires_in = settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60 * 10
+    access_token = create_access_token(
+        data={"user_id": user_id}, expires_delta=timedelta(seconds=expires_in))
     return {
         "access_token": access_token,
         "token_type": "bearer",
-        "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60 * 10
+        "expires_in": expires_in
     }
 
 # 事先创建，避免路由冲突问题
 user_router = APIRouter()
 
-@user_router.get("/sys_user/permissions", dependencies=[Depends(oauth2_scheme)], response_model=RolePermissionsResponse)
-@require_auth(module_name="User", permission_names=["READ"])
-async def get_user_permissions(request: Request):
-    """获取当前用户权限"""
-    # 根据 token 获取当前用户
-    current_user = await get_current_user_from_request(request)
-    role_id = current_user.get("role_id")
-
+async def _get_role_permissions(role_id: int):
+    # 1. 查询角色的模块权限
     role_module_perms = await main_db.run_query(
         RoleModulePermission,
         where_conditions={"role_id": {"operator": "=", "value": role_id}},
         return_clear=True
     )
 
-    # 遍历结果，转换 module_id 和 permissions
-    module_permissions = []
-    for perm in role_module_perms:
-        module_perms = ModulePermissionSchema(
-            module=get_module_name(perm["module_id"]),
-            permissions=get_permissions_names_from_bitmask(perm["permissions"])
-        )
-
-        module_permissions.append(module_perms)
-
-    role_perms = RolePermissionSchema(
-        role_id=role_id,
-        module_permissions=module_permissions
+    # 2. 查询所有模块信息（包含父子关系）
+    all_modules = await main_db.run_query(
+        Module,
+        return_clear=True
     )
 
-    return RolePermissionsResponse(
+    # 4. 构建权限映射表（module_id -> permissions）
+    permission_map = {}
+    for perm in role_module_perms:
+        module_id = perm["module_id"]
+        permissions = get_permissions_names_from_bitmask(perm["permissions"])
+        permission_map[module_id] = permissions
+
+    # 5. 找出所有父模块（parent_id 为 None 的模块）
+    parent_modules = [m for m in all_modules if m.get("parent_id") is None]
+
+    # 6. 构建层级结构
+    parent_module_permissions = []
+    for parent in parent_modules:
+        parent_id = parent["id"]
+
+        # 查找该父模块下的所有子模块
+        child_modules = [m for m in all_modules if m.get("parent_id") == parent_id]
+
+        # 只处理有子模块的父模块
+        if not child_modules:
+            continue
+
+        # 构建子模块权限列表（只有子模块才有权限）
+        sub_modules = []
+        for child in child_modules:
+            child_id = child["id"]
+            # 只有在权限映射表中的子模块才添加到结果中
+            if child_id in permission_map:
+                sub_module = SubModulePermissionSchema(
+                    module=child["name"],
+                    description=child.get("description"),
+                    permissions=permission_map[child_id]
+                )
+                sub_modules.append(sub_module)
+
+        # 只有当存在有权限的子模块时，才添加父模块
+        if sub_modules:
+            parent_module = ParentModulePermissionSchema(
+                module=parent["name"],
+                description=parent.get("description"),
+                sub_modules=sub_modules
+            )
+            parent_module_permissions.append(parent_module)
+
+    # 7. 构建响应
+    role_module_perms_schema = RoleModulePermissionsSchema(
+        role_id=role_id,
+        module_permissions=parent_module_permissions
+    )
+    return role_module_perms_schema
+
+@user_router.get("/sys_user/permissions", dependencies=[Depends(oauth2_scheme)], response_model=RoleModulePermissionsResponse)
+@require_auth(module_name="User", permission_names=["READ"])
+async def get_user_permissions(request: Request):
+    """获取当前用户权限"""
+    # 根据 token 获取当前用户
+    current_user = await get_current_user_from_request(request)
+    role_id = current_user.get("role_id")
+    role_module_perms_schema = await _get_role_permissions(role_id)
+    return RoleModulePermissionsResponse(
         code=HTTP_SUCCESS,
         msg="Success",
-        data=[role_perms]
+        data=role_module_perms_schema
     )
 
 user_config = {
@@ -288,34 +338,19 @@ async def set_role_permissions(request: Request, role_permissions: SetRolePermis
     }
 
 
-@role_router.get("/sys_role/{role_id}/permissions", dependencies=[Depends(oauth2_scheme)], response_model=RolePermissionsResponse)
+@role_router.get("/sys_role/{role_id}/permissions", dependencies=[Depends(oauth2_scheme)], response_model=RoleModulePermissionsResponse)
 @require_auth(module_name="Role", permission_names=["READ"])
 async def get_role_permissions(request: Request, role_id: int):
-    """获取当前用户权限"""
+    """
+    获取指定角色的权限（层级结构）
 
-    role_module_perms = await main_db.run_query(
-        RoleModulePermission,
-        where_conditions={"role_id": {"operator": "=", "value": role_id}},
-        return_clear=True
-    )
+    返回父模块-子模块的层级结构，只有子模块才有权限。
+    """
 
-    # 遍历结果，转换 module_id 和 permissions
-    module_permissions = []
-    for perm in role_module_perms:
-        module_perms = ModulePermissionSchema(
-            module=get_module_name(perm["module_id"]),
-            permissions=get_permissions_names_from_bitmask(perm["permissions"])
-        )
+    role_module_perms_schema = await _get_role_permissions(role_id)
 
-        module_permissions.append(module_perms)
-
-    role_perms = RolePermissionSchema(
-        role_id=role_id,
-        module_permissions=module_permissions
-    )
-
-    return RolePermissionsResponse(
+    return RoleModulePermissionsResponse(
         code=HTTP_SUCCESS,
         msg="Success",
-        data=[role_perms]
+        data=role_module_perms_schema
     )

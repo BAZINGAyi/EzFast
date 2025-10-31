@@ -6,6 +6,7 @@ Init_Modules = [
     {
         "id": 10000,
         "name": "System Management",
+        "description": "系统管理",
         "url": "/system",
         "icon": "system",
         "parent_id": None,
@@ -14,6 +15,7 @@ Init_Modules = [
             {
                 "id": 10001,
                 "name": "User",
+                "description": "用户管理",
                 "url": "/system/user",
                 "icon": "user",
                 "parent_id": 10000,
@@ -22,6 +24,7 @@ Init_Modules = [
             {
                 "id": 10002,
                 "name": "Role",
+                "description": "角色管理",
                 "url": "/system/role",
                 "icon": "role",
                 "parent_id": 10000,
@@ -30,6 +33,7 @@ Init_Modules = [
             {
                 "id": 10003,
                 "name": "Permission",
+                "description": "权限管理",
                 "url": "/system/permission",
                 "icon": "permission",
                 "parent_id": 10000,
@@ -38,6 +42,7 @@ Init_Modules = [
             {
                 "id": 10004,
                 "name": "Module",
+                "description": "模块管理",
                 "url": "/system/module",
                 "icon": "module",
                 "parent_id": 10000,
