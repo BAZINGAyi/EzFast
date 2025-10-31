@@ -35,7 +35,7 @@ from core.schemas.user_schema import (
     SubModulePermissionSchema
 )
 
-from datetime import timedelta
+from datetime import timedelta, datetime
 
 # 创建系统 API 路由器
 router = APIRouter()
@@ -59,6 +59,10 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    # 更新用户最后登录时间
+    await main_db.update(
+        User, {"last_login_time": datetime.now()}, User.id == user[0]["id"])
 
     user_id = user[0]["id"]
     expires_in = settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60 * 10
