@@ -66,6 +66,7 @@ class User(Base, CommonModelMixin):
             'role_id': self.role_id,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'last_login_time': self.last_login_time.isoformat() if self.last_login_time else None,
         }
 
     def __repr__(self) -> str:
@@ -190,7 +191,7 @@ class RoleModulePermission(Base):
 class OperationLog(Base, CommonModelMixin):
     """系统操作日志表"""
     __tablename__ = "sys_operation_log"
-    
+
     user_id: Mapped[int] = mapped_column(
         ForeignKey("sys_user.id"), nullable=False, comment="操作用户ID"
     )

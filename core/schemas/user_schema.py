@@ -201,3 +201,49 @@ class ModulePermissionsTemplateSchema(BaseModel):
 class ModulePermissionsTemplateResponse(CommonResponseSchema):
     """模块权限模板响应 Schema（层级结构）"""
     data: Optional[ModulePermissionsTemplateSchema] = Field(None, description="模块权限模板（层级结构）")
+
+
+class UserMeDataSchema(BaseModel):
+    """用户信息和权限配置 Schema"""
+    user_info: ListUserSchema = Field(..., description="用户信息")
+    role_permissions: RoleModulePermissionsSchema = Field(..., description="角色模块权限配置")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "user_info": {
+                    "id": 1,
+                    "username": "admin",
+                    "email": "admin@example.com",
+                    "phone_number": "13800138000",
+                    "role_id": 1,
+                    "locale": "zh-CN",
+                    "is_active": True,
+                    "description": "管理员账户",
+                    "created_at": "2024-01-01T00:00:00",
+                    "updated_at": "2024-01-01T00:00:00",
+                    "last_login_time": "2024-01-01T00:00:00"
+                },
+                "role_permissions": {
+                    "role_id": 1,
+                    "module_permissions": [
+                        {
+                            "module": "System Management",
+                            "description": "系统管理",
+                            "sub_modules": [
+                                {
+                                    "module": "user",
+                                    "description": "用户管理",
+                                    "permissions": ["READ", "WRITE", "UPDATE", "DELETE"]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        }
+
+
+class UserMeResponse(CommonResponseSchema):
+    """用户信息和权限响应 Schema"""
+    data: Optional[UserMeDataSchema] = Field(None, description="用户信息和权限数据")

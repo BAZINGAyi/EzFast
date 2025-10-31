@@ -34,7 +34,9 @@ from core.schemas.user_schema import (
     ParentModulePermissionSchema,
     SubModulePermissionSchema,
     ModulePermissionsTemplateSchema,
-    ModulePermissionsTemplateResponse
+    ModulePermissionsTemplateResponse,
+    UserMeDataSchema,
+    UserMeResponse
 )
 
 from datetime import timedelta, datetime
@@ -145,18 +147,34 @@ async def _get_role_permissions(role_id: int):
     )
     return role_module_perms_schema
 
-@user_router.get("/sys_user/permissions", dependencies=[Depends(oauth2_scheme)], response_model=RoleModulePermissionsResponse)
+@user_router.get("/sys_user/me", dependencies=[Depends(oauth2_scheme)], response_model=UserMeResponse)
 @require_auth(module_name="User", permission_names=["READ"])
-async def get_user_permissions(request: Request):
-    """获取当前用户权限"""
+async def get_current_user_info(request: Request):
+    """获取当前用户信息和权限"""
     # 根据 token 获取当前用户
     current_user = await get_current_user_from_request(request)
     role_id = current_user.get("role_id")
+
+    # 移除密码字段
+    user_data = current_user.copy()
+    user_data.pop("password_hash", None)
+
+    # 转换为 ListUserSchema
+    user_schema = ListUserSchema(**user_data)
+
+    # 获取角色权限
     role_module_perms_schema = await _get_role_permissions(role_id)
-    return RoleModulePermissionsResponse(
+
+    # 组合数据
+    me_data = UserMeDataSchema(
+        user_info=user_schema,
+        role_permissions=role_module_perms_schema
+    )
+
+    return UserMeResponse(
         code=HTTP_SUCCESS,
         msg="Success",
-        data=role_module_perms_schema
+        data=me_data
     )
 
 @user_router.get("/sys_user/permissions/template", dependencies=[Depends(oauth2_scheme)], response_model=ModulePermissionsTemplateResponse)

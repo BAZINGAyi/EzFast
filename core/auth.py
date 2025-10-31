@@ -179,7 +179,7 @@ def require_auth(module_name: str = None, permission_names: list = None):
         return wrapper
     return decorator
 
-async def get_current_user_from_request(request: Request) -> User:
+async def get_current_user_from_request(request: Request) -> dict:
     """
     Get current user object from request state (requires database query).
 
