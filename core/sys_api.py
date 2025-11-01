@@ -280,6 +280,12 @@ async def create_user(request: Request, user: CreateUserSchema):
 @require_auth(module_name="User", permission_names=["UPDATE"])
 async def update_user(request: Request, item_id: int, user: UpdateUserSchema):
     """更新用户 - 处理密码哈希"""
+    # 获取登录用户 id
+    login_user_id = request.state.current_user_id
+    if login_user_id != item_id:
+        raise HTTPException(
+            status_code=HTTP_FAILED, detail="You are allowed to update your own user information only.")
+
     user_dict = user.model_dump(exclude_none=True)
     is_all_none = all(value is None for value in user_dict.values())
     if is_all_none:
